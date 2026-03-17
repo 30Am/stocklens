@@ -2,12 +2,33 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 from sqlalchemy import desc, func, select
+import asyncio
+import yfinance as yf
 
 from app.models.db import CrossMarketEvent, Signal, Stock
 from app.schemas.signal import CrossMarketEventOut, SignalOut
 from app.utils.database import AsyncSessionLocal
 
 router = APIRouter(tags=["signals"])
+
+
+async def _fetch_price(ticker: str) -> tuple[float | None, float | None]:
+    """Fetch latest close and change_pct from yfinance asynchronously."""
+    try:
+        loop = asyncio.get_event_loop()
+        def _get():
+            t = yf.Ticker(ticker)
+            hist = t.history(period="2d")
+            if len(hist) >= 2:
+                prev = float(hist["Close"].iloc[-2])
+                close = float(hist["Close"].iloc[-1])
+                return round(close, 2), round((close - prev) / prev * 100, 2)
+            elif len(hist) == 1:
+                return round(float(hist["Close"].iloc[-1]), 2), 0.0
+            return None, None
+        return await loop.run_in_executor(None, _get)
+    except Exception:
+        return None, None
 
 
 @router.get("/signal/{ticker}", response_model=SignalOut)
@@ -54,10 +75,18 @@ async def get_trending(
         if market:
             q = q.where(Stock.market == market.upper())
         rows = (await session.execute(q)).all()
+        # Fetch live prices concurrently
+        prices = await asyncio.gather(*[_fetch_price(s.ticker) for s, _ in rows])
         return [
-            SignalOut(ticker=s.ticker, name=st.name, signal=s.signal, score=s.score,
-                      reason=s.reason, market=st.market, sector=st.sector, created_at=s.created_at)
-            for s, st in rows
+            SignalOut(
+                ticker=s.ticker, name=st.name, signal=s.signal, score=s.score,
+                reason=s.reason, market=st.market, sector=st.sector,
+                created_at=s.created_at,
+                close=prices[i][0], change_pct=prices[i][1],
+                currency="INR" if st.market == "IN" else "USD",
+                exchange=st.exchange,
+            )
+            for i, (s, st) in enumerate(rows)
         ]
 
 

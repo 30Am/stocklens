@@ -23,10 +23,7 @@ export function Dashboard() {
     getTrending(apiMarket, 12)
       .then((data: unknown) => {
         if (Array.isArray(data) && data.length > 0) {
-          const rows = data as StockSummary[];
-          // Only replace mock if backend has populated price-change data
-          const hasChangePct = rows.some((s) => s.change_pct != null && s.change_pct !== 0);
-          if (hasChangePct) setStocks(rows);
+          setStocks(data as StockSummary[]);
         }
       })
       .catch(() => { /* use mock */ })

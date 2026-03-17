@@ -12,6 +12,10 @@ class SignalOut(BaseModel):
     market: str | None
     sector: str | None
     created_at: datetime | None
+    close: float | None = None
+    change_pct: float | None = None
+    currency: str | None = None
+    exchange: str | None = None
 
 
 class CrossMarketEventOut(BaseModel):
