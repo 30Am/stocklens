@@ -209,68 +209,151 @@ def _build_system_prompt(context: dict) -> str:
 def _template_reply(signals: list[dict], tickers: list[str], message: str) -> str:
     """Rich fallback when all LLMs are unavailable."""
     t = message.lower()
-    ticker_str = ", ".join(tickers) if tickers else "the market"
 
+    # ── Ticker-specific signal replies ────────────────────────────────────────
     if signals:
         buys = [s for s in signals if s["signal"] == "BUY"]
         sells = [s for s in signals if s["signal"] == "SELL"]
-        if buys and not sells:
-            stocks = ", ".join(f"**{s['ticker']}** (score: {s['score']:.2f})" for s in buys)
-            return (
-                f"**Bullish signals detected** for {stocks}.\n\n"
-                "Positive sentiment and momentum indicators suggest potential accumulation opportunity. "
-                "Validate with your own research and risk tolerance.\n\n"
-                "*Disclaimer: Algorithmic signals only — not financial advice.*"
-            )
-        if sells and not buys:
-            stocks = ", ".join(f"**{s['ticker']}** (score: {s['score']:.2f})" for s in sells)
-            return (
-                f"**Bearish signals detected** for {stocks}.\n\n"
-                "Negative sentiment and momentum suggest caution. Review position sizing and stop-losses.\n\n"
-                "*Disclaimer: Algorithmic signals only — not financial advice.*"
-            )
+        holds = [s for s in signals if s["signal"] == "HOLD"]
+        lines = ["**StockLens AI Signal Summary**\n"]
+        for s in signals:
+            emoji = "🟢" if s["signal"] == "BUY" else "🔴" if s["signal"] == "SELL" else "🟡"
+            lines.append(f"{emoji} **{s['ticker']}** — {s['signal']} (score: {s['score']:.2f})")
+            if s.get("reason"):
+                lines.append(f"   _{s['reason']}_")
+        if buys:
+            lines.append(f"\n**Outlook**: {len(buys)} stock(s) showing bullish momentum — positive sentiment and technical strength suggest accumulation may be considered.")
+        elif sells:
+            lines.append(f"\n**Outlook**: {len(sells)} stock(s) under selling pressure — caution advised, review stop-losses.")
+        else:
+            lines.append("\n**Outlook**: Mixed/neutral signals — await a clearer catalyst before taking fresh positions.")
+        lines.append("\n*Disclaimer: Algorithmic signals only — not financial advice. Always do your own research.*")
+        return "\n".join(lines)
+
+    # ── "What to buy today / best stocks" ─────────────────────────────────────
+    if any(k in t for k in ["buy today", "buy now", "should i buy", "best stock", "which stock", "top stock",
+                              "recommend", "market open", "opens", "good stock", "stock to buy"]):
         return (
-            f"**Mixed signals** for {ticker_str}. The market is awaiting clearer catalysts. "
-            "A **HOLD** stance is suggested — monitor for decisive breakout or breakdown.\n\n"
-            "*Disclaimer: Algorithmic signals only — not financial advice.*"
+            "**What to look for when the market opens:**\n"
+            "- **Gap-up stocks** with volume > 2x average — potential momentum plays\n"
+            "- **Nifty 50 leaders**: RELIANCE, HDFCBANK, TCS, INFY — large-caps tend to set the tone\n"
+            "- **US overnight cues**: Check Dow/S&P futures — they heavily influence Nifty open\n"
+            "- **Sector rotation**: If banking is strong, check HDFCBANK, ICICIBANK, SBIN; if IT is green, look at TCS, INFY, WIPRO\n"
+            "- **SGX Nifty / Gift Nifty**: Indicates where Nifty 50 will open — positive = bullish bias\n\n"
+            "**Stocks historically strong on opens** (India):\n"
+            "- High-beta: TATAMOTORS, BAJFINANCE, ADANIENT — big moves both ways\n"
+            "- Defensive: HDFCBANK, ITC, NESTLEIND — steady, lower risk\n\n"
+            "**For US market open**:\n"
+            "- Watch pre-market movers on earnings/news\n"
+            "- NVDA, AAPL, MSFT, AMZN — set the NASDAQ tone\n\n"
+            "*Disclaimer: Not financial advice. Market conditions change rapidly — always use stop-losses.*"
         )
 
-    if any(k in t for k in ["macro", "fed", "rbi", "rate", "inflation", "gdp", "recession"]):
+    # ── Macro / rates ────────────────────────────────────────────────────────
+    if any(k in t for k in ["fed", "rbi", "rate", "inflation", "gdp", "recession", "macro", "interest"]):
         return (
-            "**Macro context**: Global markets face central bank policy divergence. "
-            "RBI's rate stance directly impacts Indian banking and NBFC stocks. "
-            "Fed rate decisions drive USD/INR movement and FII flows into Indian equities — "
-            "rising US rates typically trigger FII selling in Indian markets, while a dovish Fed supports rally. "
-            "Monitor inflation data for policy signals."
+            "**Macro Market Context:**\n"
+            "- **RBI repo rate**: Currently 6.25% (cut Feb 2025) — positive for banking, real estate, NBFCs\n"
+            "- **US Fed**: Holding rates steady in 2025 — watching CPI/PCE data closely\n"
+            "- **USD/INR**: ~83-84 range — strong dollar pressures FII outflows from India\n"
+            "- **FII flows**: Net buyers/sellers directly move Nifty — track daily on NSE website\n"
+            "- **Impact on sectors**:\n"
+            "  - Rate cuts → bullish for Banking (HDFCBANK, SBIN), Real Estate (DLF), NBFCs (BAJFINANCE)\n"
+            "  - Strong dollar → bullish for IT exporters (TCS, INFY, WIPRO) collecting USD revenue\n"
+            "  - High inflation → defensive sectors (FMCG: HUL, ITC) outperform\n"
+            "  - Rate hikes → bearish for growth stocks and real estate\n\n"
+            "*Monitor RBI MPC meetings (every 6-8 weeks) and US FOMC meetings for policy direction.*"
         )
 
-    if any(k in t for k in ["portfolio", "diversif", "allocat", "invest how"]):
+    # ── Portfolio / diversification ───────────────────────────────────────────
+    if any(k in t for k in ["portfolio", "diversif", "allocat", "how to invest", "where to invest", "sip", "lump"]):
         return (
-            "**Portfolio construction framework**:\n"
-            "- **Equity allocation**: 60-70% (split India/US based on risk appetite)\n"
-            "- **Sector diversification**: IT + Banking + Consumer + Healthcare core\n"
-            "- **Geographic split**: 60% India (growth), 40% US (stability + tech)\n"
-            "- **Cash buffer**: Keep 10-15% for opportunities during corrections\n"
-            "- **Rebalancing**: Quarterly review, annual rebalancing\n"
-            "- Use SIP for equity; lump sum during market dips > 10%\n\n"
-            "*Not financial advice — consult a SEBI-registered advisor.*"
+            "**Portfolio Construction Guide:**\n"
+            "- **Equity split**: 60-70% India + 30-40% US for balanced growth\n"
+            "- **India sector mix**: Banking (20%) + IT (20%) + Consumer (15%) + Healthcare (15%) + Others (30%)\n"
+            "- **US holdings**: NVDA, AAPL, MSFT, AMZN, GOOGL as core; add sector ETFs (QQQ, SPY)\n"
+            "- **Investment style**: SIP monthly for long-term wealth; lump sum only during 10%+ market dips\n"
+            "- **Cash buffer**: Keep 10-15% cash for opportunistic buying during corrections\n"
+            "- **Rebalancing**: Review quarterly, rebalance annually\n"
+            "- **Risk tiers**:\n"
+            "  - Conservative: Large-cap index funds (Nifty 50 ETF + S&P 500 ETF)\n"
+            "  - Moderate: Mix of large + mid-caps with some sectoral ETFs\n"
+            "  - Aggressive: Mid/small-caps + individual US growth stocks + thematic funds\n\n"
+            "*Consult a SEBI-registered advisor for personalized advice.*"
         )
 
-    if any(k in t for k in ["technical", "chart", "support", "resistance", "rsi", "macd", "moving average"]):
+    # ── Technical analysis ────────────────────────────────────────────────────
+    if any(k in t for k in ["technical", "chart", "rsi", "macd", "moving average", "support", "resistance",
+                              "candlestick", "bollinger", "breakout", "trend"]):
         return (
-            "**Technical analysis basics**:\n"
-            "- **MA crossover**: 20-day crossing above 50-day = bullish signal\n"
-            "- **RSI**: Below 30 = oversold (buy signal), above 70 = overbought (sell signal)\n"
-            "- **MACD**: Positive crossover signals momentum shift upward\n"
-            "- **Support/Resistance**: Previous highs become resistance; lows become support\n"
-            "- StockLens charts support MA20 and MA50 overlays — toggle via the chart controls."
+            "**Technical Analysis Key Indicators:**\n"
+            "- **RSI (Relative Strength Index)**: Below 30 = oversold (potential buy), Above 70 = overbought (potential sell)\n"
+            "- **MACD**: Bullish when MACD line crosses above signal line; bearish when it crosses below\n"
+            "- **Moving Averages**: Price above MA50 & MA200 = uptrend; death cross (MA50 < MA200) = bearish\n"
+            "- **Bollinger Bands**: Price touching lower band = oversold; upper band = overbought\n"
+            "- **Volume**: Rising price + rising volume = strong trend; rising price + falling volume = weak rally\n"
+            "- **Support/Resistance**: Previous highs become resistance; previous lows become support\n"
+            "- **Candlestick patterns**: Hammer/Doji at lows = reversal signal; Engulfing candle = strong momentum\n\n"
+            "Use the MA20 and MA50 toggles on StockLens charts to visualize moving averages on any stock."
         )
 
+    # ── Fundamental analysis ──────────────────────────────────────────────────
+    if any(k in t for k in ["fundamental", "pe ratio", "p/e", "valuation", "earnings", "roe", "revenue",
+                              "balance sheet", "debt", "eps", "book value"]):
+        return (
+            "**Fundamental Analysis Key Metrics:**\n"
+            "- **P/E Ratio**: Price ÷ EPS. India IT fair value: 20-30x; Banking: 10-15x; FMCG: 40-60x\n"
+            "- **P/B Ratio**: Price ÷ Book Value. Below 1 = potentially undervalued\n"
+            "- **ROE**: Return on Equity. Above 15% is healthy; above 20% is excellent\n"
+            "- **Debt-to-Equity**: Below 0.5 is safe for most sectors; banks are exceptions\n"
+            "- **Revenue growth**: Consistent 15%+ YoY growth signals strong business momentum\n"
+            "- **EPS growth**: Earnings Per Share growth is the core driver of stock price appreciation\n"
+            "- **Operating Cash Flow**: Positive and growing OCF = healthy business fundamentals\n\n"
+            "Check quarterly results (Q1-Q4) on BSE/NSE website or company investor relations pages."
+        )
+
+    # ── IPO questions ─────────────────────────────────────────────────────────
+    if any(k in t for k in ["ipo", "listing", "grey market", "gmp", "subscribe"]):
+        return (
+            "**IPO Investment Guide:**\n"
+            "- **GMP (Grey Market Premium)**: Positive GMP signals strong market demand pre-listing\n"
+            "- **Subscription levels**: 10x+ retail subscription = strong demand; 100x+ = extremely hot IPO\n"
+            "- **Apply via**: UPI-based ASBA on your broker app (Zerodha, Groww, Upstox, etc.)\n"
+            "- **Allotment**: Check on registrar website (KFintech, Link Intime) post-closure\n"
+            "- **Listing strategy**: If listed at 20%+ premium, consider booking profits; if flat, assess fundamentals\n"
+            "- **Key things to check**: Company financials (P&L, cash flow), promoter stake post-IPO, use of IPO proceeds, industry tailwinds\n"
+            "- **Red flags**: High promoter OFS (they're selling, not raising for growth), negative cash flow, overvalued vs peers\n\n"
+            "*Past IPO performance is not a guarantee of future returns.*"
+        )
+
+    # ── Sector analysis ───────────────────────────────────────────────────────
+    if any(k in t for k in ["sector", "industry", "it sector", "banking", "pharma", "fmcg", "auto", "energy",
+                              "metal", "realty", "infrastructure", "defence"]):
+        return (
+            "**Indian Sector Outlook (2025):**\n"
+            "- **IT/Technology** 💻: Cautious — US IT spending slowdown, AI disruption risk. TCS, INFY, WIPRO resilient on large deals\n"
+            "- **Banking & Finance** 🏦: Positive — RBI rate cuts, strong credit growth, clean balance sheets. HDFCBANK, ICICIBANK, SBIN\n"
+            "- **Defence** 🛡️: Strong tailwinds — govt capex, PLI scheme. HAL, BEL, BHEL\n"
+            "- **FMCG** 🛒: Defensive, rural recovery. HUL, ITC, NESTLEIND for stability\n"
+            "- **Auto** 🚗: EV transition story. TATAMOTORS (JLR), MARUTI, M&M\n"
+            "- **Pharma** 💊: US FDA approvals key catalyst. SUNPHARMA, DRREDDY, CIPLA\n"
+            "- **Real Estate** 🏢: Rate cut beneficiary. DLF, GODREJPROP, PRESTIGE\n"
+            "- **Renewable Energy** ⚡: Long-term theme. ADANIGREEN, NTPC, TATAPOWER\n\n"
+            "*Sector rotation is key — follow FII/DII activity for institutional money flow signals.*"
+        )
+
+    # ── Generic investment question (catch-all) ───────────────────────────────
     return (
-        f"StockLens AI is monitoring **{ticker_str}**. "
-        "Check the dashboard for real-time signals and stock detail pages for AI explanations. "
-        "You can ask me about specific stocks, sectors, macroeconomics, technical/fundamental analysis, "
-        "portfolio strategies, or any other investment topic."
+        "**Investment Quick Guide:**\n"
+        "- **For Indian stocks**: Check Nifty 50 / Sensex trend first — broad market direction matters most\n"
+        "- **Top large-caps to track**: RELIANCE, HDFCBANK, TCS, INFY, ICICIBANK, BAJFINANCE, TATAMOTORS\n"
+        "- **For US stocks**: NVDA, AAPL, MSFT, AMZN, GOOGL are the key market movers\n"
+        "- **Risk management**: Never invest more than 5% of portfolio in a single stock\n"
+        "- **Entry strategy**: Buy in 2-3 tranches — don't go all-in at once\n"
+        "- **Track**: FII flows, global cues (Dow/Nasdaq futures), crude oil price, USD/INR daily\n\n"
+        "Ask me about a **specific stock** (e.g. 'Tell me about RELIANCE'), a **sector** (e.g. 'How is banking sector doing?'), "
+        "or a **concept** (e.g. 'Explain P/E ratio') for detailed analysis.\n\n"
+        "*Not financial advice — always conduct your own research.*"
     )
 
 
