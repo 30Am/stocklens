@@ -339,12 +339,22 @@ const CONFLICT_ZONES: ConflictZone[] = [
 // ── Fly-to effect ──────────────────────────────────────────────────────────────
 function FlyToZone({ zone }: { zone: ConflictZone | null }) {
   const map = useMap();
+  const prevRef = useRef<ConflictZone | null>(null);
+
   useEffect(() => {
-    if (!zone) {
-      map.flyTo([15, 10], 2, { duration: 1.5 });
-    } else {
-      map.flyTo([zone.coordinates[1], zone.coordinates[0]], zone.zoom, { duration: 1.8, easeLinearity: 0.25 });
-    }
+    // Guard: don't fly on initial mount with no zone
+    if (!zone && prevRef.current === null) return;
+    try {
+      if (!zone) {
+        map.flyTo([15, 10], 2, { duration: 1.5 });
+      } else {
+        const [lng, lat] = zone.coordinates;
+        if (isFinite(lat) && isFinite(lng)) {
+          map.flyTo([lat, lng], zone.zoom, { duration: 1.8, easeLinearity: 0.25 });
+        }
+      }
+    } catch (_) { /* map not ready yet */ }
+    prevRef.current = zone;
   }, [zone, map]);
   return null;
 }
@@ -663,197 +673,168 @@ export function GeoRisk() {
     });
   }, [selected]);
 
-  const handleSelect  = useCallback((z: ConflictZone) => setSelected((prev) => prev?.id === z.id ? null : z), []);
+  const handleSelect   = useCallback((z: ConflictZone) => setSelected((prev) => prev?.id === z.id ? null : z), []);
   const handleDeselect = useCallback(() => setSelected(null), []);
 
-  const criticalCount  = CONFLICT_ZONES.filter(z => z.severity === 'critical').length;
-  const highCount      = CONFLICT_ZONES.filter(z => z.severity === 'high').length;
-  const mediumCount    = CONFLICT_ZONES.filter(z => z.severity === 'medium').length;
-  const monitorCount   = CONFLICT_ZONES.filter(z => z.severity === 'monitoring').length;
+  const criticalCount = CONFLICT_ZONES.filter(z => z.severity === 'critical').length;
+  const highCount     = CONFLICT_ZONES.filter(z => z.severity === 'high').length;
+  const mediumCount   = CONFLICT_ZONES.filter(z => z.severity === 'medium').length;
+  const monitorCount  = CONFLICT_ZONES.filter(z => z.severity === 'monitoring').length;
 
-  const mapEl = (
-    <MapContainer
-      center={[15, 10]}
-      zoom={2}
-      minZoom={2}
-      maxZoom={12}
-      style={{ width: '100%', height: '100%' }}
-      zoomControl={true}
-      attributionControl={true}
-      worldCopyJump={true}
-    >
-      <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxZoom={19} subdomains="abcd" />
-      <FlyToZone zone={selected} />
-      <CountryLayer geoJSON={worldGeo} zones={CONFLICT_ZONES} selected={selected} />
-      {CONFLICT_ZONES.map((z) => (
-        <Marker
-          key={z.id}
-          position={[z.coordinates[1], z.coordinates[0]]}
-          icon={createMarkerIcon(z, selected?.id === z.id)}
-          eventHandlers={{ click: () => handleSelect(z) }}
-          zIndexOffset={selected?.id === z.id ? 1000 : 0}
-        >
-          <Popup className="conflict-popup">
-            <div className="px-3 py-2.5 min-w-[200px]">
-              <div className="flex items-center gap-2 mb-1">
-                <div className={`w-2 h-2 rounded-full ${SEV[z.severity].dot}`} />
-                <span className="text-xs font-bold text-white">{z.name}</span>
-              </div>
-              <p className="text-[10px] text-zinc-400 leading-snug">{z.description.slice(0, 100)}…</p>
-              <div className="flex items-center gap-2 mt-2">
-                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${SEV[z.severity].badge}`}>{SEV[z.severity].label}</span>
-                <span className="text-[9px] text-zinc-600">{z.status}</span>
-              </div>
-            </div>
-          </Popup>
-        </Marker>
-      ))}
-    </MapContainer>
-  );
-
+  // ── Single unified layout: flex-col on mobile, flex-row on desktop ──────────
+  // ONE MapContainer — never duplicated. Layout adapts via CSS only.
   return (
-    <div className="flex-1 overflow-hidden" style={{ height: 'calc(100vh - 56px)' }}>
+    <div className="flex-1 overflow-hidden flex flex-col lg:flex-row" style={{ height: 'calc(100vh - 56px)' }}>
 
-      {/* ── Desktop ── */}
-      <div className="hidden lg:flex h-full">
-
-        {/* Map */}
-        <div className="flex-1 min-w-0 relative overflow-hidden">
-          {/* Status bar overlay */}
-          <div className="absolute top-0 left-0 right-0 z-[500] pointer-events-none flex items-center justify-between px-4 py-2.5
-            bg-gradient-to-b from-[#06060f]/95 via-[#06060f]/60 to-transparent">
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                <span className="text-[11px] font-bold text-red-400 tracking-wider">LIVE</span>
-              </div>
-              <span className="text-[10px] text-zinc-600">Global Conflict & Geo-Risk Monitor</span>
+      {/* ── Map column ── */}
+      {/* Mobile: 45% height. Desktop: fills remaining width at full height */}
+      <div
+        className="relative overflow-hidden flex-shrink-0 lg:flex-1 lg:min-w-0"
+        style={{ height: '45%' }}
+        // Override height on desktop via inline style + class combo
+        ref={(el) => {
+          if (el) {
+            const applyHeight = () => {
+              el.style.height = window.innerWidth >= 1024 ? '100%' : '45%';
+            };
+            applyHeight();
+            window.addEventListener('resize', applyHeight);
+            // store cleanup on element for GC
+            (el as HTMLElement & { _resizeCleanup?: () => void })._resizeCleanup?.();
+            (el as HTMLElement & { _resizeCleanup?: () => void })._resizeCleanup = () =>
+              window.removeEventListener('resize', applyHeight);
+          }
+        }}
+      >
+        {/* Status bar */}
+        <div className="absolute top-0 left-0 right-0 z-[500] pointer-events-none flex items-center justify-between px-3 lg:px-4 py-2 lg:py-2.5 bg-gradient-to-b from-[#06060f]/95 via-[#06060f]/60 to-transparent">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 lg:w-2 lg:h-2 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-[10px] lg:text-[11px] font-bold text-red-400 tracking-wider">LIVE</span>
             </div>
-            <div className="flex items-center gap-3">
-              {([['critical', criticalCount, 'text-red-400'], ['high', highCount, 'text-orange-400'], ['medium', mediumCount, 'text-yellow-400'], ['monitoring', monitorCount, 'text-blue-400']] as const)
-                .filter(([, c]) => c > 0)
-                .map(([sev, count, cls]) => (
-                  <div key={sev} className="flex items-center gap-1">
-                    <div className={`w-1.5 h-1.5 rounded-full ${SEV[sev].dot}`} />
-                    <span className={`text-[10px] font-semibold ${cls}`}>{count}</span>
-                    <span className="text-[10px] text-zinc-700 capitalize">{sev}</span>
-                  </div>
-                ))
-              }
-            </div>
+            <span className="hidden lg:block text-[10px] text-zinc-600">Global Conflict &amp; Geo-Risk Monitor</span>
           </div>
-
-          {mapEl}
-
-          {/* Bottom hint */}
-          <div className="absolute bottom-4 left-4 z-[500] pointer-events-none">
-            <div className="flex items-center gap-3 text-[9px] text-zinc-700 bg-black/40 backdrop-blur-sm rounded-lg px-2.5 py-1.5 border border-white/5">
-              <span>🔍 Scroll to zoom</span>
-              <span>✋ Drag to pan</span>
-              <span>📍 Click marker to analyze</span>
-            </div>
-          </div>
-
-          {/* Selected zone floating tag */}
-          {selected && (
-            <div className="absolute bottom-4 right-4 z-[500] animate-sweep-in">
-              <div className="flex items-center gap-2 bg-surface-1/90 backdrop-blur-sm border border-border rounded-xl px-3 py-2">
-                <div className={`w-2 h-2 rounded-full ${SEV[selected.severity].dot}`} />
-                <span className="text-xs font-semibold text-white">{selected.name}</span>
-                <button onClick={handleDeselect} className="text-zinc-600 hover:text-zinc-400 text-xs ml-1 transition-colors">✕</button>
+          <div className="flex items-center gap-2 lg:gap-3">
+            {([
+              ['critical', criticalCount, 'text-red-400'],
+              ['high',     highCount,     'text-orange-400'],
+              ['medium',   mediumCount,   'text-yellow-400'],
+              ['monitoring', monitorCount, 'text-blue-400'],
+            ] as const).filter(([, c]) => c > 0).map(([sev, count, cls]) => (
+              <div key={sev} className="flex items-center gap-1">
+                <div className={`w-1.5 h-1.5 rounded-full ${SEV[sev].dot}`} />
+                <span className={`text-[10px] font-semibold ${cls}`}>{count}</span>
+                <span className="hidden lg:block text-[10px] text-zinc-700 capitalize">{sev}</span>
               </div>
-            </div>
-          )}
+            ))}
+          </div>
         </div>
 
-        {/* Sidebar */}
-        <div className="w-80 xl:w-96 shrink-0 border-l border-border bg-surface-0 flex flex-col overflow-hidden">
-          {/* Panel top bar */}
-          <div className="px-4 py-3 border-b border-border bg-surface-1 flex items-center gap-2 shrink-0">
-            <div className="w-5 h-5 rounded-md bg-red-500/15 border border-red-500/25 flex items-center justify-center text-[10px]">⚔</div>
-            <span className="text-xs font-bold text-white">Geo-Risk Intel</span>
+        {/* THE single Leaflet map */}
+        <MapContainer
+          center={[15, 10]}
+          zoom={2}
+          minZoom={2}
+          maxZoom={18}
+          style={{ width: '100%', height: '100%' }}
+          zoomControl={true}
+          attributionControl={true}
+          worldCopyJump={true}
+        >
+          <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxZoom={19} subdomains="abcd" />
+          <FlyToZone zone={selected} />
+          <CountryLayer geoJSON={worldGeo} zones={CONFLICT_ZONES} selected={selected} />
+          {CONFLICT_ZONES.map((z) => (
+            <Marker
+              key={z.id}
+              position={[z.coordinates[1], z.coordinates[0]]}
+              icon={createMarkerIcon(z, selected?.id === z.id)}
+              eventHandlers={{ click: () => handleSelect(z) }}
+              zIndexOffset={selected?.id === z.id ? 1000 : 0}
+            >
+              <Popup>
+                <div className="px-3 py-2.5 min-w-[200px]">
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className={`w-2 h-2 rounded-full ${SEV[z.severity].dot}`} />
+                    <span className="text-xs font-bold text-white">{z.name}</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-400 leading-snug">{z.description.slice(0, 110)}…</p>
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${SEV[z.severity].badge}`}>{SEV[z.severity].label}</span>
+                    <span className="text-[9px] text-zinc-600">{z.status}</span>
+                  </div>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+
+        {/* Bottom hint — desktop only */}
+        <div className="hidden lg:block absolute bottom-4 left-4 z-[500] pointer-events-none">
+          <div className="flex items-center gap-3 text-[9px] text-zinc-700 bg-black/40 backdrop-blur-sm rounded-lg px-2.5 py-1.5 border border-white/5">
+            <span>🔍 Scroll to zoom</span>
+            <span>✋ Drag to pan</span>
+            <span>📍 Click marker</span>
+          </div>
+        </div>
+
+        {/* Selected zone floating tag */}
+        {selected && (
+          <div className="absolute bottom-2 lg:bottom-4 left-2 right-2 lg:left-auto lg:right-4 lg:w-auto z-[500] animate-sweep-in">
+            <div className="flex items-center gap-2 bg-surface-1/90 backdrop-blur-sm border border-border rounded-xl px-3 py-2">
+              <div className={`w-2 h-2 rounded-full ${SEV[selected.severity].dot}`} />
+              <span className="text-xs font-semibold text-white truncate">{selected.name}</span>
+              <button onClick={handleDeselect} className="text-zinc-600 hover:text-zinc-400 text-xs ml-auto shrink-0 transition-colors">✕</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Side panel column ── */}
+      {/* Mobile: flex-1 (remaining height). Desktop: fixed width sidebar */}
+      <div className="flex-1 lg:flex-none lg:w-80 xl:w-96 border-t lg:border-t-0 lg:border-l border-border bg-surface-0 flex flex-col overflow-hidden">
+        {/* Panel header */}
+        <div className="px-4 py-2.5 lg:py-3 border-b border-border bg-surface-1 flex items-center gap-2 shrink-0">
+          <div className="w-5 h-5 rounded-md bg-red-500/15 border border-red-500/25 flex items-center justify-center text-[10px]">⚔</div>
+          <span className="text-xs font-bold text-white">Geo-Risk Intel</span>
+          {selected ? (
+            <button onClick={handleDeselect} className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">← All</button>
+          ) : (
             <div className="ml-auto flex items-center gap-1.5 bg-surface-2 rounded-full px-2 py-0.5 border border-border">
               <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
               <span className="text-[9px] text-zinc-500">{CONFLICT_ZONES.length} zones</span>
             </div>
-          </div>
-
-          {selected ? (
-            <DetailPanel zone={selected} onBack={handleDeselect} stockPrices={stockPrices} />
-          ) : (
-            <div className="flex flex-col h-full overflow-hidden">
-              <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-                {CONFLICT_ZONES.map((z) => (
-                  <ZoneListItem key={z.id} zone={z} isSelected={selected === z} onClick={() => handleSelect(z)} />
-                ))}
-              </div>
-              {/* Legend */}
-              <div className="px-4 py-3 border-t border-border bg-surface-1 shrink-0">
-                <div className="text-[9px] text-zinc-700 uppercase tracking-widest font-semibold mb-2">Legend</div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                  {(Object.entries(SEV) as [Severity, typeof SEV[Severity]][]).map(([k, v]) => (
-                    <div key={k} className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${v.dot}`} />
-                      <span className="text-[10px] text-zinc-500">{v.label}</span>
-                    </div>
-                  ))}
-                  <div className="col-span-2 mt-1 pt-1.5 border-t border-border flex items-center gap-4 text-[9px] text-zinc-700">
-                    <span>▬ Direct conflict</span>
-                    <span>╌ Economically affected</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Mobile ── */}
-      <div className="lg:hidden flex flex-col h-full overflow-hidden">
-        {/* Map */}
-        <div className="relative overflow-hidden" style={{ height: '45%' }}>
-          {/* Status */}
-          <div className="absolute top-0 left-0 right-0 z-[500] pointer-events-none flex items-center justify-between px-3 py-2 bg-gradient-to-b from-[#06060f]/90 to-transparent">
-            <div className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              <span className="text-[9px] font-bold text-red-400">LIVE</span>
-            </div>
-            <div className="flex items-center gap-2">
-              {([['critical', criticalCount], ['high', highCount], ['medium', mediumCount]] as const).map(([sev, count]) => (
-                count > 0 && <div key={sev} className="flex items-center gap-0.5"><span className={`w-1.5 h-1.5 rounded-full ${SEV[sev].dot}`} /><span className="text-[9px] text-zinc-600">{count}</span></div>
-              ))}
-            </div>
-          </div>
-          {mapEl}
-          {selected && (
-            <div className="absolute bottom-2 left-2 right-2 z-[500] flex items-center justify-between bg-surface-1/90 backdrop-blur-sm border border-border rounded-xl px-3 py-1.5">
-              <div className="flex items-center gap-1.5">
-                <div className={`w-2 h-2 rounded-full ${SEV[selected.severity].dot}`} />
-                <span className="text-xs font-semibold text-white truncate">{selected.name}</span>
-              </div>
-              <button onClick={handleDeselect} className="text-zinc-600 text-xs ml-2 shrink-0">✕</button>
-            </div>
           )}
         </div>
 
-        {/* Panel */}
-        <div className="flex-1 overflow-hidden border-t border-border bg-surface-0 flex flex-col">
-          <div className="px-4 py-2.5 border-b border-border bg-surface-1 flex items-center gap-2 shrink-0">
-            <span className="text-xs font-bold text-white">⚔ Geo-Risk Intel</span>
-            {selected && (
-              <button onClick={handleDeselect} className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">← All</button>
-            )}
-          </div>
-          {selected ? (
-            <DetailPanel zone={selected} onBack={handleDeselect} stockPrices={stockPrices} />
-          ) : (
+        {selected ? (
+          <DetailPanel zone={selected} onBack={handleDeselect} stockPrices={stockPrices} />
+        ) : (
+          <div className="flex flex-col h-full overflow-hidden">
             <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
               {CONFLICT_ZONES.map((z) => (
                 <ZoneListItem key={z.id} zone={z} isSelected={false} onClick={() => handleSelect(z)} />
               ))}
             </div>
-          )}
-        </div>
+            {/* Legend — desktop only (saves space on mobile) */}
+            <div className="hidden lg:block px-4 py-3 border-t border-border bg-surface-1 shrink-0">
+              <div className="text-[9px] text-zinc-700 uppercase tracking-widest font-semibold mb-2">Legend</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                {(Object.entries(SEV) as [Severity, typeof SEV[Severity]][]).map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${v.dot}`} />
+                    <span className="text-[10px] text-zinc-500">{v.label}</span>
+                  </div>
+                ))}
+                <div className="col-span-2 mt-1 pt-1.5 border-t border-border flex items-center gap-4 text-[9px] text-zinc-700">
+                  <span>▬ Direct conflict</span>
+                  <span>╌ Economically affected</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
