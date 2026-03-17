@@ -1,6 +1,6 @@
 """
-LLM explainer — GPT-4o-mini one-line AI explanations.
-Gracefully degrades to a template if OPENAI_API_KEY is not set.
+LLM explainer — Groq (Llama 3.3 70B) one-line AI explanations.
+Falls back to OpenAI if GROQ_API_KEY not set, then to template.
 """
 from __future__ import annotations
 
@@ -15,13 +15,39 @@ _client = None
 
 def _get_client():
     global _client
-    if _client is None and settings.openai_api_key:
+    if _client is not None:
+        return _client
+
+    # Try Groq first (free, fast, OpenAI-compatible)
+    if settings.groq_api_key:
+        try:
+            from openai import AsyncOpenAI
+            _client = AsyncOpenAI(
+                api_key=settings.groq_api_key,
+                base_url="https://api.groq.com/openai/v1",
+            )
+            log.info("LLM explainer: using Groq (Llama 3.3 70B)")
+            return _client
+        except Exception as e:
+            log.warning("Groq client init failed: %s", e)
+
+    # Fallback to OpenAI
+    if settings.openai_api_key:
         try:
             from openai import AsyncOpenAI
             _client = AsyncOpenAI(api_key=settings.openai_api_key)
+            log.info("LLM explainer: using OpenAI")
+            return _client
         except Exception as e:
             log.warning("OpenAI client init failed: %s", e)
-    return _client
+
+    return None
+
+
+def _get_model() -> str:
+    if settings.groq_api_key:
+        return "llama-3.3-70b-versatile"
+    return "gpt-4o-mini"
 
 
 async def explain(
@@ -49,7 +75,7 @@ async def explain(
                 f"Be specific, not generic. No disclaimers."
             )
             resp = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=_get_model(),
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=60,
                 temperature=0.3,

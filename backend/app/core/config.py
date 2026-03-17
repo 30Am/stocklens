@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     news_api_key: str = ""
     alpha_vantage_key: str = ""
     openai_api_key: str = ""
+    groq_api_key: str = ""
     polygon_api_key: str = ""
 
     # CORS — space-separated list of allowed origins for production
