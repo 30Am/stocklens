@@ -13,7 +13,14 @@ export function CrossMarketPanel({ events }: { events: CrossMarketEvent[] }) {
 
   if (!latest) return null;
 
-  const colorCls = impactColor[latest.impact_direction] ?? impactColor.MIXED;
+  // Support both mock data fields and backend API fields
+  const title = latest.event_type ?? latest.event ?? 'Cross-Market Event';
+  const desc = latest.description ?? '';
+  const direction = latest.impact_direction ?? latest.impact ?? 'MIXED';
+  const tickers = latest.affected_tickers ??
+    [latest.in_ticker, latest.us_ticker].filter((t): t is string => !!t);
+
+  const colorCls = impactColor[direction] ?? impactColor.MIXED;
 
   return (
     <div className="card p-4">
@@ -25,10 +32,10 @@ export function CrossMarketPanel({ events }: { events: CrossMarketEvent[] }) {
         className={`border rounded-lg p-3 cursor-pointer transition-opacity hover:opacity-80 ${colorCls}`}
         onClick={() => navigate('/cross-market')}
       >
-        <div className="text-[11px] font-semibold mb-1.5 leading-snug">{latest.event_type}</div>
-        <p className="text-[10px] text-zinc-400 leading-relaxed line-clamp-2">{latest.description}</p>
+        <div className="text-[11px] font-semibold mb-1.5 leading-snug">{title}</div>
+        <p className="text-[10px] text-zinc-400 leading-relaxed line-clamp-2">{desc}</p>
         <div className="flex flex-wrap gap-1 mt-2">
-          {latest.affected_tickers.slice(0, 4).map((t) => (
+          {tickers.slice(0, 4).map((t) => (
             <span key={t} className="text-[9px] px-1.5 py-0.5 bg-surface-2 border border-border rounded text-zinc-300 font-mono">
               {t}
             </span>

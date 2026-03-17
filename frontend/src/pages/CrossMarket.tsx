@@ -17,13 +17,18 @@ const impactStyle: Record<string, { border: string; bg: string; title: string }>
 };
 
 function EventCard({ event }: { event: CrossMarketEvent }) {
-  const style = impactStyle[event.impact_direction] ?? impactStyle.MIXED;
+  const direction = event.impact_direction ?? event.impact ?? 'MIXED';
+  const style = impactStyle[direction] ?? impactStyle.MIXED;
+  const title = event.event_type ?? event.event ?? 'Cross-Market Event';
+  const desc = event.description ?? '';
+  const tickers = event.affected_tickers ??
+    [event.in_ticker, event.us_ticker].filter((t): t is string => !!t);
   return (
     <div className={`card border ${style.border} ${style.bg} p-4 animate-fade-in`}>
-      <h4 className={`text-sm font-semibold mb-2 ${style.title}`}>{event.event_type}</h4>
-      <p className="text-xs text-zinc-400 leading-relaxed mb-3">{event.description}</p>
+      <h4 className={`text-sm font-semibold mb-2 ${style.title}`}>{title}</h4>
+      <p className="text-xs text-zinc-400 leading-relaxed mb-3">{desc}</p>
       <div className="flex flex-wrap gap-1.5">
-        {event.affected_tickers.map((t) => (
+        {tickers.map((t) => (
           <span key={t} className="text-[10px] px-1.5 py-0.5 bg-surface-2 border border-border rounded text-zinc-300 font-mono">
             {t}
           </span>

@@ -63,12 +63,18 @@ export interface SignalRecord {
 
 export interface CrossMarketEvent {
   id: number;
-  event_type: string;
-  description: string;
-  impact_direction: string;
-  source_market: string;
-  target_market: string;
-  affected_tickers: string[];
+  // Frontend mock fields
+  event_type?: string;
+  description?: string;
+  impact_direction?: string;
+  source_market?: string;
+  target_market?: string;
+  affected_tickers?: string[];
+  // Backend DB fields (different schema)
+  event?: string;
+  impact?: string;
+  in_ticker?: string | null;
+  us_ticker?: string | null;
   created_at: string;
 }
 
