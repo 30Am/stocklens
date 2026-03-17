@@ -8,6 +8,7 @@ import type { MarketFilter } from '../../types';
 const NAV = [
   { label: 'Dashboard', to: '/' },
   { label: 'News', to: '/news' },
+  { label: 'Maps', to: '/maps' },
   { label: 'Cross-Market', to: '/cross-market' },
   { label: 'Watchlist', to: '/watchlist' },
   { label: 'Portfolio', to: '/portfolio' },

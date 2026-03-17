@@ -13,6 +13,7 @@ import { News } from './pages/News';
 import { CrossMarket } from './pages/CrossMarket';
 import { Watchlist } from './pages/Watchlist';
 import { Portfolio } from './pages/Portfolio';
+import { GeoRisk } from './pages/GeoRisk';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null };
@@ -55,6 +56,7 @@ export default function App() {
                       <Route path="/cross-market" element={<CrossMarket />} />
                       <Route path="/watchlist" element={<Watchlist />} />
                       <Route path="/portfolio" element={<Portfolio />} />
+                      <Route path="/maps" element={<GeoRisk />} />
                     </Routes>
                   </main>
                   <ChatWidget />
