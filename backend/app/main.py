@@ -23,8 +23,11 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     log.info("investment-app starting [env=%s]", settings.environment)
 
-    await init_db()
-    await seed_stock_universe()
+    try:
+        await init_db()
+        await seed_stock_universe()
+    except Exception as e:
+        log.error("DB init failed (will retry on next request): %s", e)
 
     for label, coro in [
         ("forex",   run_forex_update()),
