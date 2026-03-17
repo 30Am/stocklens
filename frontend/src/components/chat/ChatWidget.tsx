@@ -95,16 +95,18 @@ function localFallback(q: string): string {
 }
 
 const SUGGESTIONS = [
-  'What is the signal for RELIANCE today?',
-  'Why is NVIDIA moving up?',
-  'How is Fed policy affecting Indian IT stocks?',
-  'Which Indian banking stocks look bullish?',
+  'Best BUY signals right now?',
+  'How is Fed policy affecting Indian markets?',
+  'Explain MACD and RSI for beginners',
+  'How to build a diversified India+US portfolio?',
+  'Which sectors are bullish this week?',
+  'What is P/E ratio and why does it matter?',
 ];
 
 const WELCOME: Message = {
   id: 'welcome',
   role: 'assistant',
-  text: 'Hi! I\'m StockLens AI. Ask me anything about Indian or US stocks — signals, news, cross-market trends, or market conditions.',
+  text: 'Hi! I\'m StockLens AI powered by Groq. Ask me **anything** about investing — stock signals, technical/fundamental analysis, macroeconomics, portfolio strategies, IPOs, or specific companies in India or the US.',
 };
 
 export function ChatWidget() {
@@ -180,7 +182,7 @@ export function ChatWidget() {
             <span className="text-lg">🤖</span>
             <div>
               <div className="text-sm font-semibold text-white">StockLens AI</div>
-              <div className="text-[10px] text-violet-400">GPT-4o-mini · Market context aware</div>
+              <div className="text-[10px] text-violet-400">Groq AI · Real-time market context</div>
             </div>
             <button
               onClick={() => setMessages([WELCOME])}
@@ -230,7 +232,7 @@ export function ChatWidget() {
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about any stock..."
+              placeholder="Ask about any stock, sector, or market..."
               disabled={loading}
               className="flex-1 bg-surface-2 border border-border rounded-xl px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-zinc-600 disabled:opacity-50"
             />

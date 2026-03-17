@@ -4,6 +4,52 @@ interface Props {
   tickers?: string[];
 }
 
+/** Render a small subset of markdown: **bold**, bullet lines, and line breaks. */
+function MarkdownText({ text }: { text: string }) {
+  const lines = text.split('\n');
+
+  return (
+    <span className="space-y-0.5 block">
+      {lines.map((line, li) => {
+        if (!line.trim()) return <br key={li} />;
+
+        // Detect bullet line (starts with - or •)
+        const isBullet = /^[\-•]\s/.test(line.trim());
+        const content = isBullet ? line.replace(/^[\-•]\s*/, '') : line;
+
+        // Split on **bold** markers
+        const parts = content.split(/(\*\*[^*]+\*\*)/g);
+        const rendered = parts.map((part, pi) => {
+          if (part.startsWith('**') && part.endsWith('**')) {
+            return <strong key={pi} className="text-white font-semibold">{part.slice(2, -2)}</strong>;
+          }
+          return <span key={pi}>{part}</span>;
+        });
+
+        if (isBullet) {
+          return (
+            <div key={li} className="flex gap-1.5 items-start">
+              <span className="text-violet-400 mt-0.5 shrink-0">•</span>
+              <span>{rendered}</span>
+            </div>
+          );
+        }
+
+        // Heading lines (## or starts with uppercase word + colon)
+        if (line.startsWith('## ')) {
+          return (
+            <div key={li} className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider mt-1.5 mb-0.5">
+              {line.replace('## ', '')}
+            </div>
+          );
+        }
+
+        return <div key={li}>{rendered}</div>;
+      })}
+    </span>
+  );
+}
+
 export function ChatMessage({ role, text, tickers }: Props) {
   const isUser = role === 'user';
   return (
@@ -16,13 +62,13 @@ export function ChatMessage({ role, text, tickers }: Props) {
       </div>
 
       {/* Bubble */}
-      <div className={`max-w-[80%] ${isUser ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
+      <div className={`max-w-[85%] ${isUser ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
         <div className={`px-3 py-2 rounded-xl text-sm leading-relaxed ${
           isUser
             ? 'bg-blue-600/20 border border-blue-500/20 text-blue-100 rounded-tr-none'
-            : 'bg-surface-2 border border-border text-zinc-200 rounded-tl-none'
+            : 'bg-surface-2 border border-border text-zinc-300 rounded-tl-none'
         }`}>
-          {text}
+          {isUser ? text : <MarkdownText text={text} />}
         </div>
         {!isUser && tickers && tickers.length > 0 && (
           <div className="flex flex-wrap gap-1 px-1">
