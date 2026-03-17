@@ -104,10 +104,10 @@ def create_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=600,
     )
 
-    # ── NLP pipeline — runs 10 min after each news fetch ─────────────────────
+    # ── NLP pipeline — 5 fixed daily runs (reduced from every-30-min to save RAM) ─
     scheduler.add_job(
         run_nlp_pipeline,
-        CronTrigger(hour=6, minute=10, timezone=TZ_IST),
+        CronTrigger(hour=6, minute=15, timezone=TZ_IST),
         id="nlp_indian_morning",
         name="NLP pipeline (Indian morning)",
         replace_existing=True,
@@ -115,28 +115,35 @@ def create_scheduler() -> AsyncIOScheduler:
     )
     scheduler.add_job(
         run_nlp_pipeline,
-        CronTrigger(hour=18, minute=40, timezone=TZ_IST),
+        CronTrigger(hour=12, minute=0, timezone=TZ_IST),
+        id="nlp_indian_midday",
+        name="NLP pipeline (Indian midday)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        run_nlp_pipeline,
+        CronTrigger(hour=16, minute=0, timezone=TZ_IST),
+        id="nlp_indian_close",
+        name="NLP pipeline (Indian close)",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        run_nlp_pipeline,
+        CronTrigger(hour=18, minute=45, timezone=TZ_IST),
         id="nlp_us_evening",
         name="NLP pipeline (US evening)",
         replace_existing=True,
         misfire_grace_time=300,
     )
-    # Continuous NLP during market hours (every 30 min)
     scheduler.add_job(
         run_nlp_pipeline,
-        CronTrigger(hour="9-15", minute="10,40", timezone=TZ_IST),
-        id="nlp_indian_market",
-        name="NLP pipeline (Indian market hours)",
+        CronTrigger(hour=23, minute=0, timezone=TZ_IST),
+        id="nlp_us_night",
+        name="NLP pipeline (US night)",
         replace_existing=True,
-        misfire_grace_time=60,
-    )
-    scheduler.add_job(
-        run_nlp_pipeline,
-        CronTrigger(hour="19-23,0,1", minute="10,40", timezone=TZ_IST),
-        id="nlp_us_market",
-        name="NLP pipeline (US market hours)",
-        replace_existing=True,
-        misfire_grace_time=60,
+        misfire_grace_time=300,
     )
 
     return scheduler

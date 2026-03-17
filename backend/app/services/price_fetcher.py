@@ -18,32 +18,16 @@ from app.core.universe import INDIA_TICKERS, US_TICKERS, get_currency, get_marke
 
 log = logging.getLogger(__name__)
 
-# Batch size — yfinance handles multi-ticker downloads well up to ~50 at a time
-_BATCH = 50
-
-
-def _parse_ticker_info(ticker: str, info: dict) -> dict | None:
-    """Extract a clean price record from yfinance .info dict."""
-    price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
-    if price is None:
-        return None
-    return {
-        "ticker": ticker,
-        "close": float(price),
-        "open": float(info.get("regularMarketOpen") or price),
-        "high": float(info.get("regularMarketDayHigh") or price),
-        "low": float(info.get("regularMarketDayLow") or price),
-        "volume": int(info.get("regularMarketVolume") or 0),
-        "timestamp": datetime.now(timezone.utc),
-        "market": get_market(ticker),
-        "currency": get_currency(ticker),
-    }
+# Batch size — keep small to avoid large in-memory DataFrames on free-tier (512 MB)
+_BATCH = 10
 
 
 async def fetch_latest_prices(tickers: list[str]) -> list[dict]:
     """
     Fetch latest price snapshot for a list of tickers.
-    Batches into groups to avoid yfinance rate limits.
+    Uses period="1d" interval="1d" so yfinance returns a single-row summary
+    DataFrame per ticker — drastically lower memory vs minute-by-minute data.
+    Batches are processed sequentially (not concurrently) to cap peak RSS.
     Returns a list of price dicts ready to insert into the DB.
     """
     results: list[dict] = []
@@ -54,12 +38,14 @@ async def fetch_latest_prices(tickers: list[str]) -> list[dict]:
             data = yf.download(
                 tickers=batch,
                 period="1d",
-                interval="1m",
+                interval="1d",      # daily bar only — 1 row per ticker, not 390
                 group_by="ticker",
                 auto_adjust=True,
                 progress=False,
-                threads=True,
+                threads=False,      # avoid spawning extra threads on free tier
             )
+            if data.empty:
+                return batch_results
             for ticker in batch:
                 try:
                     if len(batch) == 1:
@@ -86,12 +72,11 @@ async def fetch_latest_prices(tickers: list[str]) -> list[dict]:
             log.warning("batch download failed: %s", e)
         return batch_results
 
-    # Run batches in threadpool (yfinance is sync)
+    # Run batches sequentially in threadpool — avoids concurrent RAM spikes
     loop = asyncio.get_event_loop()
     batches = [tickers[i : i + _BATCH] for i in range(0, len(tickers), _BATCH)]
-    tasks = [loop.run_in_executor(None, _download_batch, b) for b in batches]
-    batch_results = await asyncio.gather(*tasks)
-    for br in batch_results:
+    for batch in batches:
+        br = await loop.run_in_executor(None, _download_batch, batch)
         results.extend(br)
 
     log.info("fetched prices for %d/%d tickers", len(results), len(tickers))
