@@ -1,873 +1,858 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import 'leaflet/dist/leaflet.css';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  ComposableMap, Geographies, Geography,
-  Marker, ZoomableGroup, Sphere, Graticule,
-} from 'react-simple-maps';
+import { MapContainer, TileLayer, GeoJSON as LeafletGeoJSON, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import type { Feature, FeatureCollection } from 'geojson';
+import * as topojson from 'topojson-client';
 import { getStockDetail } from '../api/client';
 
-// ── World topology ─────────────────────────────────────────────────────────────
-const GEO_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+// ── Fix Leaflet default icon paths for bundlers ────────────────────────────
+// (needed so no console errors even though we use custom divIcons)
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
+
+// ── Tile layer ────────────────────────────────────────────────────────────────
+const TILE_URL   = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+const TILE_ATTR  = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>';
+const GEO_URL    = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
 
 // ── Severity palette ──────────────────────────────────────────────────────────
 const SEV = {
-  critical:   { color: '#ef4444', glow: 'rgba(239,68,68,0.4)',   label: 'CRITICAL',   dot: 'bg-red-500',    badge: 'bg-red-500/15 text-red-400 border-red-500/30' },
-  high:       { color: '#f97316', glow: 'rgba(249,115,22,0.4)',  label: 'HIGH',        dot: 'bg-orange-500', badge: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
-  medium:     { color: '#eab308', glow: 'rgba(234,179,8,0.4)',   label: 'MEDIUM',      dot: 'bg-yellow-500', badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
-  monitoring: { color: '#3b82f6', glow: 'rgba(59,130,246,0.4)',  label: 'MONITOR',     dot: 'bg-blue-500',   badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
+  critical:   { hex: '#ef4444', rgb: '239,68,68',   label: 'CRITICAL',  dot: 'bg-red-500',    badge: 'bg-red-500/15 text-red-400 border-red-500/30',    bar: 'bg-red-500',    barW: 'w-full'    },
+  high:       { hex: '#f97316', rgb: '249,115,22',  label: 'HIGH',      dot: 'bg-orange-500', badge: 'bg-orange-500/15 text-orange-400 border-orange-500/30', bar: 'bg-orange-500', barW: 'w-3/4'  },
+  medium:     { hex: '#eab308', rgb: '234,179,8',   label: 'MEDIUM',    dot: 'bg-yellow-500', badge: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30', bar: 'bg-yellow-500', barW: 'w-1/2'  },
+  monitoring: { hex: '#3b82f6', rgb: '59,130,246',  label: 'MONITOR',   dot: 'bg-blue-500',   badge: 'bg-blue-500/15 text-blue-400 border-blue-500/30',   bar: 'bg-blue-500',   barW: 'w-1/4'  },
 } as const;
 type Severity = keyof typeof SEV;
 
-// ── Conflict zone data ────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface ConflictStock {
   ticker: string;
   name: string;
   sector: string;
   direction: 'up' | 'down' | 'volatile' | 'neutral';
+  reason: string;
 }
-
 interface ConflictZone {
   id: string;
   name: string;
   region: string;
-  coordinates: [number, number];
+  coordinates: [number, number];   // [lng, lat]
+  zoom: number;                     // suggested zoom on select
   severity: Severity;
   status: string;
   description: string;
   detail: string;
-  affectedCountries: string[];   // numeric ISO 3166-1 as strings
+  directCountries: string[];        // numeric ISO-3166-1 as strings
+  affectedCountries: string[];      // economically / politically impacted
   stocks: ConflictStock[];
   marketImpact: string;
+  tradeRoutes: string[];
   startDate: string;
   casualties: string;
+  displaced: string;
 }
+interface StockPrice { price: number; change: number; changePercent: number; loading: boolean; }
 
+// ── Conflict zone data ────────────────────────────────────────────────────────
 const CONFLICT_ZONES: ConflictZone[] = [
   {
     id: 'ukraine',
     name: 'Russia–Ukraine War',
     region: 'Eastern Europe',
     coordinates: [32.0, 49.0],
+    zoom: 5,
     severity: 'critical',
     status: 'Active Combat',
-    description: 'Full-scale Russian invasion since Feb 2022. The largest land war in Europe since WWII.',
-    detail: 'Ongoing frontline fighting across eastern and southern Ukraine. Drone warfare escalating. Nuclear threats remain.',
-    affectedCountries: ['804', '643'],
+    description: 'Full-scale Russian invasion since Feb 2022. The largest land war in Europe since WWII with 500K+ casualties.',
+    detail: 'Drone warfare escalating on both sides. Russia occupying ~18% of Ukrainian territory. Zaporizhzhia nuclear plant at risk. NATO arms deliveries ongoing.',
+    directCountries: ['804','643'],
+    affectedCountries: ['276','616','246','642','498','112','440','428','233','703','348','100','268','031','398','792','528','040','056','208','250','380','724','752'],
     stocks: [
-      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',       direction: 'up' },
-      { ticker: 'RTX',  name: 'Raytheon',          sector: 'Defense',       direction: 'up' },
-      { ticker: 'NOC',  name: 'Northrop Grumman',  sector: 'Defense',       direction: 'up' },
-      { ticker: 'XOM',  name: 'ExxonMobil',        sector: 'Energy',        direction: 'volatile' },
-      { ticker: 'BP',   name: 'BP plc',            sector: 'Energy',        direction: 'down' },
-      { ticker: 'BA',   name: 'Boeing',            sector: 'Aerospace',     direction: 'up' },
+      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',     direction: 'up',       reason: 'HIMARS, F-35 orders surging. NATO members re-arming.' },
+      { ticker: 'RTX',  name: 'Raytheon',          sector: 'Defense',     direction: 'up',       reason: 'Patriot missile systems in high demand globally.' },
+      { ticker: 'NOC',  name: 'Northrop Grumman',  sector: 'Defense',     direction: 'up',       reason: 'B-21 production + drone systems demand elevated.' },
+      { ticker: 'BA',   name: 'Boeing',            sector: 'Aerospace',   direction: 'up',       reason: 'Military aircraft orders from European allies.' },
+      { ticker: 'XOM',  name: 'ExxonMobil',        sector: 'Energy',      direction: 'volatile', reason: 'European LNG demand replacing Russian gas supply.' },
+      { ticker: 'BP',   name: 'BP plc',            sector: 'Energy',      direction: 'down',     reason: 'Wrote off $25B+ in Russian assets. Long-term impact.' },
     ],
-    marketImpact: 'Defense stocks at multi-year highs. European energy crisis persists. Grain & wheat futures elevated. Russian energy sanctions reshaping global oil flows.',
+    marketImpact: 'European defense spending at 2%+ of GDP for the first time. LNG exports from US to EU at record highs. Russian energy sanctions reshaping global oil trade flows.',
+    tradeRoutes: ['Black Sea grain corridor', 'Baltic Sea energy routes', 'Trans-Siberian pipeline network'],
     startDate: 'Feb 2022',
     casualties: '500,000+',
+    displaced: '14 million',
   },
   {
     id: 'middleeast',
     name: 'Israel–Hamas War',
     region: 'Middle East',
     coordinates: [34.8, 31.5],
+    zoom: 6,
     severity: 'critical',
     status: 'Active Combat',
-    description: 'Conflict in Gaza following Oct 7, 2023 Hamas attack. Regional escalation with Hezbollah, Iran, and Houthi forces.',
-    detail: 'Houthi attacks on Red Sea shipping have disrupted global trade. Iran missile exchanges have raised fears of wider war.',
-    affectedCountries: ['376', '275'],
+    description: 'Conflict in Gaza following Oct 7, 2023 Hamas attack. Regional multi-front war with Hezbollah, Iran, and Houthi forces.',
+    detail: 'Iran launched direct missile and drone attacks on Israel. Hezbollah fighting on northern front. Houthis targeting Red Sea shipping. Ceasefire negotiations ongoing.',
+    directCountries: ['376','275'],
+    affectedCountries: ['422','760','400','818','364','682','887','368','784','048','414','512','706','262'],
     stocks: [
-      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',       direction: 'up' },
-      { ticker: 'RTX',  name: 'Raytheon',          sector: 'Defense',       direction: 'up' },
-      { ticker: 'CVX',  name: 'Chevron',           sector: 'Energy',        direction: 'up' },
-      { ticker: 'XOM',  name: 'ExxonMobil',        sector: 'Energy',        direction: 'up' },
-      { ticker: 'ZIM',  name: 'ZIM Shipping',      sector: 'Shipping',      direction: 'volatile' },
+      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',   direction: 'up',       reason: 'Iron Dome, F-35 parts, and THAAD in high demand.' },
+      { ticker: 'RTX',  name: 'Raytheon',          sector: 'Defense',   direction: 'up',       reason: 'Iron Dome interception systems. Israeli defense contracts.' },
+      { ticker: 'CVX',  name: 'Chevron',           sector: 'Energy',    direction: 'up',       reason: 'Middle East risk premium elevated on crude prices.' },
+      { ticker: 'XOM',  name: 'ExxonMobil',        sector: 'Energy',    direction: 'up',       reason: 'Strait of Hormuz risk; oil risk premium elevated.' },
+      { ticker: 'ZIM',  name: 'ZIM Shipping',      sector: 'Shipping',  direction: 'volatile', reason: 'Red Sea rerouting added $1M+ per voyage cost.' },
     ],
-    marketImpact: 'Oil price risk premium elevated. Suez Canal traffic down ~40%. Defense procurement surge. Regional airline stocks impacted.',
+    marketImpact: 'Oil risk premium ~$5-8/barrel. Suez Canal traffic down 40%. European supply chain inflation. Regional airline disruptions.',
+    tradeRoutes: ['Suez Canal', 'Strait of Hormuz', 'Red Sea shipping lanes'],
     startDate: 'Oct 2023',
     casualties: '50,000+',
+    displaced: '1.9 million',
   },
   {
     id: 'taiwan',
     name: 'Taiwan Strait Tensions',
     region: 'East Asia',
     coordinates: [120.9, 23.6],
+    zoom: 6,
     severity: 'medium',
     status: 'Elevated Tension',
-    description: 'Escalating PLA military exercises. China claims Taiwan as its territory; US commits to Taiwan\'s defense.',
-    detail: 'Any blockade or invasion scenario would devastate global semiconductor supply chains — ~90% of advanced chips are fabbed in Taiwan.',
-    affectedCountries: ['158', '156'],
+    description: 'Escalating PLA military exercises around Taiwan. China\'s largest exercises since 1996. Critical global semiconductor supply at risk.',
+    detail: 'Taiwan produces ~90% of world\'s most advanced semiconductors (TSMC). Any blockade would cause supply shock 10x worse than 2021 chip shortage.',
+    directCountries: ['158','156'],
+    affectedCountries: ['840','392','410','036','528','276','704','608','360','458','096'],
     stocks: [
-      { ticker: 'TSM',  name: 'TSMC',             sector: 'Semiconductors', direction: 'volatile' },
-      { ticker: 'NVDA', name: 'NVIDIA',            sector: 'Semiconductors', direction: 'down' },
-      { ticker: 'AMD',  name: 'AMD',              sector: 'Semiconductors', direction: 'down' },
-      { ticker: 'INTC', name: 'Intel',             sector: 'Semiconductors', direction: 'down' },
-      { ticker: 'AAPL', name: 'Apple',             sector: 'Technology',     direction: 'down' },
+      { ticker: 'TSM',  name: 'TSMC',             sector: 'Semiconductors', direction: 'volatile', reason: '90% of cutting-edge chips. Existential supply risk.' },
+      { ticker: 'NVDA', name: 'NVIDIA',            sector: 'AI/Chips',       direction: 'down',     reason: 'Depends entirely on TSMC for A100/H100 production.' },
+      { ticker: 'AMD',  name: 'AMD',               sector: 'Semiconductors', direction: 'down',     reason: 'All 5nm/7nm chips fabbed at TSMC Taiwan.' },
+      { ticker: 'AAPL', name: 'Apple',             sector: 'Technology',     direction: 'down',     reason: 'iPhone chips and Mac SoC all made by TSMC.' },
+      { ticker: 'INTC', name: 'Intel',             sector: 'Semiconductors', direction: 'volatile', reason: 'Both at risk and potential beneficiary of reshoring.' },
     ],
-    marketImpact: '~$10T GDP at risk from a Taiwan conflict. Chip shortage would be 10× worse than 2021. US-China tech decoupling accelerating.',
+    marketImpact: '~$10T global GDP at risk from Taiwan conflict. Semiconductor supply chain cannot be replicated for 5-10 years. CHIPS Act trying to reduce dependency.',
+    tradeRoutes: ['Taiwan Strait shipping lane', 'Pacific trade routes', 'Asia-US tech supply chain'],
     startDate: 'Ongoing',
     casualties: 'N/A',
+    displaced: 'N/A',
   },
   {
     id: 'sudan',
     name: 'Sudan Civil War',
     region: 'East Africa',
     coordinates: [30.2, 15.5],
+    zoom: 5,
     severity: 'high',
     status: 'Active Combat',
-    description: 'War between Sudanese Armed Forces and Rapid Support Forces. World\'s largest humanitarian crisis.',
-    detail: 'Mass atrocities reported in Darfur. Over 8M displaced. Gold-rich regions under RSF control.',
-    affectedCountries: ['729'],
+    description: 'War between Sudanese Armed Forces and Rapid Support Forces. World\'s largest displacement crisis. Mass atrocities in Darfur.',
+    detail: 'RSF controls Khartoum and gold-rich Darfur region. UAE accused of supplying RSF via Libya. Over 25 million people facing starvation.',
+    directCountries: ['729'],
+    affectedCountries: ['818','231','148','434','728','800','404'],
     stocks: [
-      { ticker: 'GLD',  name: 'SPDR Gold ETF',   sector: 'Commodities',   direction: 'up' },
-      { ticker: 'GOLD', name: 'Barrick Gold',     sector: 'Mining',        direction: 'up' },
-      { ticker: 'AEM',  name: 'Agnico Eagle',     sector: 'Mining',        direction: 'up' },
+      { ticker: 'GLD',  name: 'SPDR Gold ETF',   sector: 'Gold',    direction: 'up',       reason: 'Sudan produces ~100 tonnes/year; RSF controls gold mines.' },
+      { ticker: 'GOLD', name: 'Barrick Gold',     sector: 'Mining',  direction: 'up',       reason: 'African gold supply disruption drives prices.' },
+      { ticker: 'NEM',  name: 'Newmont Corp',     sector: 'Mining',  direction: 'up',       reason: 'Global gold supply tightness benefits producers.' },
     ],
-    marketImpact: 'Gold production disrupted. Nile water agreements at risk. Refugee crisis destabilizing Egypt and Chad.',
+    marketImpact: 'Gold supply disruption from conflict zones. Nile water agreements at risk between Sudan and Egypt. 8M+ displaced creating regional refugee crisis.',
+    tradeRoutes: ['Nile River trade corridor', 'Port Sudan Red Sea access', 'Trans-Saharan routes'],
     startDate: 'Apr 2023',
     casualties: '150,000+',
+    displaced: '8 million',
   },
   {
     id: 'myanmar',
     name: 'Myanmar Civil War',
     region: 'Southeast Asia',
     coordinates: [95.9, 21.0],
+    zoom: 5,
     severity: 'high',
     status: 'Active Combat',
-    description: 'Armed resistance against military junta following 2021 coup. Resistance forces control 60%+ of territory.',
-    detail: 'Major offensive gains by ethnic armed organizations. Junta losing control of key border regions and trade routes.',
-    affectedCountries: ['104'],
+    description: 'Armed resistance against military junta following Feb 2021 coup. Resistance forces now control 60%+ of territory.',
+    detail: 'Major ethnic armed organizations formed unified opposition. Junta losing control of key border towns and trade corridors with China, India, and Thailand.',
+    directCountries: ['104'],
+    affectedCountries: ['764','050','356','156','418'],
     stocks: [
-      { ticker: 'TOTF', name: 'TotalEnergies',   sector: 'Energy',        direction: 'down' },
-      { ticker: 'PTT',  name: 'PTT Exploration',  sector: 'Energy',        direction: 'down' },
+      { ticker: 'TTE',  name: 'TotalEnergies',   sector: 'Energy',   direction: 'down',     reason: 'Withdrew from Yadana gas pipeline due to sanctions risk.' },
+      { ticker: 'ONGC', name: 'ONGC Videsh',     sector: 'Energy',   direction: 'down',     reason: 'Indian state oil co. has Myanmar gas field exposure.' },
     ],
-    marketImpact: 'Foreign investment exodus. Gas pipeline to Thailand threatened. Manufacturing supply chains (garments, electronics) disrupted.',
+    marketImpact: 'Foreign investment exodus. Thailand gas supply (Yadana pipeline) threatened. Garment/electronics manufacturing disrupted. Drug trade surging through ungoverned zones.',
+    tradeRoutes: ['Thailand–Myanmar gas pipeline', 'China–Myanmar Economic Corridor', 'Mekong River trade route'],
     startDate: 'Feb 2021',
     casualties: '50,000+',
+    displaced: '2.6 million',
   },
   {
     id: 'yemen',
     name: 'Yemen & Houthi Campaign',
     region: 'Middle East',
     coordinates: [47.5, 15.5],
+    zoom: 5,
     severity: 'high',
     status: 'Active Combat',
-    description: 'Houthi forces attacking commercial shipping in Red Sea in solidarity with Gaza. Civil war continues in background.',
-    detail: 'Over 100 ships attacked since Nov 2023. Global shipping rerouting via Cape of Good Hope adds 10-14 days and $1M+ per voyage.',
-    affectedCountries: ['887'],
+    description: 'Houthi forces attacking commercial shipping in Red Sea in response to Gaza war. Civil war in 10th year continues.',
+    detail: '100+ ships attacked since Nov 2023. US Navy conducting Operation Prosperity Guardian. Container ships rerouting via Cape of Good Hope adding 14 days and $1M+ per voyage.',
+    directCountries: ['887'],
+    affectedCountries: ['682','512','818','262','706','356','840'],
     stocks: [
-      { ticker: 'ZIM',  name: 'ZIM Shipping',    sector: 'Shipping',      direction: 'volatile' },
-      { ticker: 'MAERSK', name: 'Maersk',        sector: 'Shipping',      direction: 'volatile' },
-      { ticker: 'RTX',  name: 'Raytheon',        sector: 'Defense',       direction: 'up' },
-      { ticker: 'XOM',  name: 'ExxonMobil',      sector: 'Energy',        direction: 'up' },
+      { ticker: 'ZIM',  name: 'ZIM Shipping',    sector: 'Shipping',  direction: 'volatile', reason: 'Rerouting all vessels; massive cost and time increases.' },
+      { ticker: 'RTX',  name: 'Raytheon',        sector: 'Defense',   direction: 'up',       reason: 'Navy intercepting Houthi drones/missiles via Tomahawks.' },
+      { ticker: 'CVX',  name: 'Chevron',         sector: 'Energy',    direction: 'up',       reason: 'Tanker disruption = higher oil prices globally.' },
     ],
-    marketImpact: 'Container shipping costs +300%. Suez Canal revenue down sharply. European inflation pressure from longer supply routes.',
-    startDate: 'Nov 2023',
+    marketImpact: 'Container shipping costs surged 300%. Global supply chains re-routing. Suez Canal revenue collapsed. European inflation re-elevated by shipping costs.',
+    tradeRoutes: ['Red Sea / Suez Canal (15% of global trade)', 'Bab-el-Mandeb Strait', 'Persian Gulf oil tanker routes'],
+    startDate: 'Nov 2023 (Houthis)',
     casualties: '20,000+',
+    displaced: '4.5 million',
   },
   {
     id: 'sahel',
     name: 'Sahel Insurgency',
     region: 'West Africa',
     coordinates: [-1.5, 13.0],
+    zoom: 5,
     severity: 'high',
     status: 'Active Combat',
-    description: 'Jihadist insurgencies across Mali, Burkina Faso, and Niger. Wagner Group (Africa Corps) presence. French forces expelled.',
-    detail: 'Three military juntas formed a mutual defense alliance. Al-Qaeda and ISIS affiliates controlling rural territory.',
-    affectedCountries: ['466', '854', '562'],
+    description: 'Jihadist insurgencies across Mali, Burkina Faso, Niger. Wagner Group (Africa Corps) entrenched. French forces expelled from all three countries.',
+    detail: 'AES Alliance (Mali+BF+Niger) formed mutual defense pact, left ECOWAS. Al-Qaeda (JNIM) and ISIS affiliates control large rural territories. 2,000+ attacks in 2024.',
+    directCountries: ['466','854','562'],
+    affectedCountries: ['566','686','288','148','012','504','324','788'],
     stocks: [
-      { ticker: 'GOLD', name: 'Barrick Gold',     sector: 'Mining',        direction: 'volatile' },
-      { ticker: 'GLD',  name: 'SPDR Gold ETF',   sector: 'Commodities',   direction: 'up' },
-      { ticker: 'NEM',  name: 'Newmont Corp',     sector: 'Mining',        direction: 'volatile' },
+      { ticker: 'GOLD', name: 'Barrick Gold',     sector: 'Mining',      direction: 'volatile', reason: 'Loulo-Gounkoto mine in Mali (600Koz/yr) seized by junta.' },
+      { ticker: 'NEM',  name: 'Newmont Corp',     sector: 'Mining',      direction: 'volatile', reason: 'Ahafo North (Ghana) and Sahel exposure.' },
+      { ticker: 'GLD',  name: 'SPDR Gold ETF',   sector: 'Gold',        direction: 'up',       reason: 'West African gold supply disruption; safe haven demand.' },
     ],
-    marketImpact: 'Major gold mining disruptions. Uranium supply from Niger under pressure (20% of EU uranium). French strategic influence collapsing.',
+    marketImpact: 'West African gold production severely disrupted. Niger provides 20% of EU uranium supply — now blocked. Trans-Saharan migration routes weaponized.',
+    tradeRoutes: ['Trans-Saharan highway', 'Niger uranium export routes', 'West Africa–Europe migration corridors'],
     startDate: '2012',
     casualties: '40,000+',
+    displaced: '6 million',
   },
   {
     id: 'drc',
     name: 'DR Congo — M23 War',
     region: 'Central Africa',
     coordinates: [25.9, -0.7],
+    zoom: 5,
     severity: 'high',
     status: 'Active Combat',
-    description: 'M23 rebel offensive backed by Rwanda. Rapid advance toward Goma. World\'s richest mineral region at stake.',
-    detail: 'DRC holds 70% of global cobalt reserves, essential for EV batteries. Conflict threatens entire EV supply chain.',
-    affectedCountries: ['180'],
+    description: 'Rwanda-backed M23 rebels have captured Goma, capital of North Kivu. DRC holds 70% of global cobalt reserves.',
+    detail: 'M23 advancing toward Bukavu. AU and SADC intervention forces deployed. DRC broke off diplomatic relations with Rwanda. Critical minerals region at stake.',
+    directCountries: ['180','646'],
+    affectedCountries: ['800','108','834','894','710','716','404'],
     stocks: [
-      { ticker: 'TSLA', name: 'Tesla',            sector: 'EV / Cobalt',   direction: 'down' },
-      { ticker: 'VALE', name: 'Vale SA',          sector: 'Mining',        direction: 'volatile' },
-      { ticker: 'GLENCORE', name: 'Glencore',     sector: 'Mining',        direction: 'volatile' },
-      { ticker: 'GLD',  name: 'SPDR Gold ETF',   sector: 'Commodities',   direction: 'up' },
+      { ticker: 'TSLA', name: 'Tesla',            sector: 'EV / Cobalt', direction: 'down',     reason: 'DRC = 70% of cobalt; battery supply chain at severe risk.' },
+      { ticker: 'VALE', name: 'Vale SA',          sector: 'Mining',      direction: 'volatile', reason: 'Cobalt and copper mines in eastern DRC threatened.' },
+      { ticker: 'ALB',  name: 'Albemarle',        sector: 'Lithium',     direction: 'down',     reason: 'EV battery materials chain disruption hits margins.' },
     ],
-    marketImpact: 'Cobalt prices volatile. EV manufacturers securing alternative supply. Humanitarian crisis worsening with 7M+ displaced.',
+    marketImpact: 'Cobalt spot prices +40% since M23 offensive began. EV manufacturers seeking alternative suppliers. Entire green energy supply chain at risk.',
+    tradeRoutes: ['Congo River basin trade route', 'Dar es Salaam corridor', 'South African mineral export lines'],
     startDate: '2022',
     casualties: '10,000+',
-  },
-  {
-    id: 'southchinasea',
-    name: 'South China Sea',
-    region: 'Pacific',
-    coordinates: [114.0, 12.0],
-    severity: 'medium',
-    status: 'Elevated Tension',
-    description: 'China asserting control over disputed waters. Philippine Coast Guard confrontations. US naval patrols increasing.',
-    detail: '$3 trillion in trade transits the South China Sea annually. China\'s island-building and "cabbage strategy" against Philippines escalating.',
-    affectedCountries: ['156', '608'],
-    stocks: [
-      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',       direction: 'up' },
-      { ticker: 'HII',  name: 'Huntington Ingalls', sector: 'Defense',     direction: 'up' },
-      { ticker: 'NVDA', name: 'NVIDIA',            sector: 'Tech',          direction: 'neutral' },
-    ],
-    marketImpact: '30% of global trade at risk. US-Philippines alliance strengthening. Regional defense spending at record highs.',
-    startDate: 'Ongoing',
-    casualties: 'N/A',
-  },
-  {
-    id: 'ethiopia',
-    name: 'Ethiopia — Amhara Crisis',
-    region: 'East Africa',
-    coordinates: [39.5, 9.0],
-    severity: 'medium',
-    status: 'Fragile Ceasefire',
-    description: 'New conflict in Amhara region following 2022 Tigray ceasefire. Oromia insurgency ongoing.',
-    detail: 'Amhara militias (Fano) fighting federal forces. Strategic implications for Horn of Africa stability and Red Sea access.',
-    affectedCountries: ['231'],
-    stocks: [
-      { ticker: 'GLD',  name: 'SPDR Gold ETF',   sector: 'Commodities',   direction: 'up' },
-    ],
-    marketImpact: 'Ethiopian airline and trade disrupted. Aid corridor to Somalia at risk. Broader Horn of Africa stability concerns.',
-    startDate: '2023',
-    casualties: '300,000+',
+    displaced: '7 million',
   },
   {
     id: 'iran',
     name: 'Iran — Nuclear & Proxy Tensions',
     region: 'Middle East',
     coordinates: [53.6, 32.4],
+    zoom: 5,
     severity: 'medium',
     status: 'High Alert',
-    description: 'Iran approaching nuclear threshold. Proxy network (Hezbollah, Hamas, Houthis, PMF) active across region.',
-    detail: 'Direct missile exchanges with Israel in 2024. Nuclear deal collapsed. IRGC conducting shadow war in multiple theaters.',
-    affectedCountries: ['364'],
+    description: 'Iran approaching nuclear threshold (~90% enrichment). Direct missile exchanges with Israel in 2024. Proxy network spanning 7 countries active.',
+    detail: 'JCPOA dead. Iran 2 weeks from bomb-grade uranium. IRGC operating Hezbollah, Hamas, Houthis, and Iraqi PMF simultaneously. Sanctions evasion via China oil sales.',
+    directCountries: ['364'],
+    affectedCountries: ['376','682','368','784','048','414','512','760','887'],
     stocks: [
-      { ticker: 'CVX',  name: 'Chevron',          sector: 'Energy',        direction: 'up' },
-      { ticker: 'XOM',  name: 'ExxonMobil',       sector: 'Energy',        direction: 'up' },
-      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',       direction: 'up' },
+      { ticker: 'CVX',  name: 'Chevron',          sector: 'Energy',   direction: 'up',   reason: 'Strait of Hormuz holds 20% of global oil supply.' },
+      { ticker: 'XOM',  name: 'ExxonMobil',       sector: 'Energy',   direction: 'up',   reason: 'Iran nuclear risk adds $10+/barrel risk premium.' },
+      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',  direction: 'up',   reason: 'F-35 upgrades for Israel; Iron Dome components.' },
     ],
-    marketImpact: 'Strait of Hormuz risk premium on oil (20% of global supply transits). Israeli defense tech sector surging.',
+    marketImpact: 'Oil market risk premium from potential Hormuz closure ($20/barrel spike estimated). Israeli defense tech exports surging. Gulf states accelerating nuclear programs.',
+    tradeRoutes: ['Strait of Hormuz (20% global oil)', 'Persian Gulf oil export infrastructure', 'Iran–China oil trade routes'],
     startDate: 'Escalated 2023',
     casualties: 'N/A',
+    displaced: 'N/A',
+  },
+  {
+    id: 'southchinasea',
+    name: 'South China Sea Disputes',
+    region: 'Pacific / SE Asia',
+    coordinates: [114.0, 12.0],
+    zoom: 5,
+    severity: 'medium',
+    status: 'Elevated Tension',
+    description: 'China seizing Philippine-claimed reefs. Water cannon and ramming incidents weekly. US-Philippines Mutual Defense Treaty invoked.',
+    detail: 'China controls 7 artificial islands with military installations. ASEAN unity fracturing. $3 trillion in annual trade at risk. US carrier groups deployed.',
+    directCountries: ['156','608'],
+    affectedCountries: ['704','458','096','360','158','392','410','840'],
+    stocks: [
+      { ticker: 'LMT',  name: 'Lockheed Martin',  sector: 'Defense',  direction: 'up',      reason: 'F-16 and frigate sales to SE Asian nations surging.' },
+      { ticker: 'HII',  name: 'Huntington Ingalls', sector: 'Defense', direction: 'up',     reason: 'Submarine and carrier building for US Navy.' },
+      { ticker: 'NVDA', name: 'NVIDIA',            sector: 'Tech',     direction: 'neutral', reason: 'Chip export controls to China tightening.' },
+    ],
+    marketImpact: '$3T in annual trade at risk. 30% of global shipping through contested waters. Regional defense budgets at record highs. US-China decoupling accelerating.',
+    tradeRoutes: ['South China Sea shipping lane (30% of global trade)', 'Strait of Malacca', 'Asia-Pacific supply chains'],
+    startDate: 'Ongoing (escalated 2023)',
+    casualties: 'N/A',
+    displaced: 'N/A',
+  },
+  {
+    id: 'ethiopia',
+    name: 'Ethiopia — Amhara & Oromia',
+    region: 'East Africa',
+    coordinates: [39.5, 9.0],
+    zoom: 5,
+    severity: 'medium',
+    status: 'Fragile Ceasefire',
+    description: 'New Amhara region conflict following 2022 Tigray ceasefire. Oromia (OLA) insurgency ongoing. Ethiopia fragmentation risk.',
+    detail: 'Amhara Fano militias fighting federal forces in strategic corridor. OLA controlling parts of Oromia. 3M+ displaced since 2023 escalation. AU mediation stalled.',
+    directCountries: ['231'],
+    affectedCountries: ['706','729','404','818','232'],
+    stocks: [
+      { ticker: 'GLD',  name: 'SPDR Gold ETF',   sector: 'Commodities', direction: 'up',      reason: 'Regional instability drives safe-haven flows.' },
+    ],
+    marketImpact: 'Ethiopian Airlines (largest African carrier) operations at risk. Horn of Africa trade hub status threatened. Nile dam dispute with Egypt worsening.',
+    tradeRoutes: ['Ethiopian Airlines hub connections', 'Horn of Africa trade routes', 'Blue Nile water corridor'],
+    startDate: '2023',
+    casualties: '300,000+',
+    displaced: '3 million',
   },
   {
     id: 'haiti',
-    name: 'Haiti Gang Crisis',
+    name: 'Haiti State Collapse',
     region: 'Caribbean',
     coordinates: [-72.5, 18.9],
+    zoom: 7,
     severity: 'monitoring',
     status: 'State Collapse',
-    description: 'Armed gangs control 85% of Port-au-Prince. Government has effectively lost authority over the capital.',
-    detail: 'International security force deployed. US evacuations. Economic collapse worsening. Political vacuum after presidential assassination.',
-    affectedCountries: ['332'],
+    description: 'Armed gangs control 90% of Port-au-Prince. Government authority collapsed. Kenyan-led multinational force deployed.',
+    detail: 'G9 and Viv Ansanm gang coalitions control capital. Prison breaks freed 4,000+ criminals. US evacuated non-emergency staff. UN Security Council authorizing broader intervention.',
+    directCountries: ['332'],
+    affectedCountries: ['214','840','388'],
     stocks: [
-      { ticker: 'MS',   name: 'Morgan Stanley',   sector: 'Emerging Mkts', direction: 'neutral' },
+      { ticker: 'ILF',  name: 'iShares Latin ETF', sector: 'Emerging Mkts', direction: 'down',   reason: 'Caribbean instability affects EM risk sentiment.' },
     ],
-    marketImpact: 'Sovereign debt at risk. Regional security implications for Caribbean. US migration pressure increasing.',
+    marketImpact: 'Sovereign debt near default. Caribbean tourism sector impacted. US migration pressure increasing significantly. Remittance flows to Haiti ($3.8B/yr) at risk.',
+    tradeRoutes: ['Caribbean Sea trade routes', 'Haiti–Dominican Republic border commerce'],
     startDate: '2021',
     casualties: '5,000+',
+    displaced: '1.5 million',
   },
 ];
 
-// ── Stock price type ──────────────────────────────────────────────────────────
-interface StockPrice {
-  price: number;
-  change: number;
-  changePercent: number;
-  loading: boolean;
+// ── Fly-to effect ──────────────────────────────────────────────────────────────
+function FlyToZone({ zone }: { zone: ConflictZone | null }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!zone) {
+      map.flyTo([15, 10], 2, { duration: 1.5 });
+    } else {
+      map.flyTo([zone.coordinates[1], zone.coordinates[0]], zone.zoom, { duration: 1.8, easeLinearity: 0.25 });
+    }
+  }, [zone, map]);
+  return null;
 }
 
-// ── Direction indicator ───────────────────────────────────────────────────────
-function DirectionBadge({ direction }: { direction: ConflictStock['direction'] }) {
-  const map = {
+// ── Custom pulsing marker icon ─────────────────────────────────────────────────
+function createMarkerIcon(zone: ConflictZone, selected: boolean): L.DivIcon {
+  const { hex, rgb } = SEV[zone.severity];
+  const base = zone.severity === 'critical' ? 44 : zone.severity === 'high' ? 38 : zone.severity === 'medium' ? 34 : 30;
+  const sz = selected ? base + 10 : base;
+  const coreSize = selected ? 13 : zone.severity === 'critical' ? 10 : zone.severity === 'high' ? 8 : 7;
+  const coreOff = (sz - coreSize) / 2;
+
+  const selectedRing = selected
+    ? `<div style="position:absolute;inset:-8px;border-radius:50%;border:1.5px dashed ${hex};opacity:0.7;animation:conflict-glow 1.5s ease-in-out infinite;"></div>`
+    : '';
+
+  return L.divIcon({
+    className: '',
+    iconSize: [sz, sz],
+    iconAnchor: [sz / 2, sz / 2],
+    html: `
+      <div class="geo-marker" style="width:${sz}px;height:${sz}px;position:relative;">
+        ${selectedRing}
+        <div class="geo-ring" style="position:absolute;inset:0;border-radius:50%;background:rgba(${rgb},0.08);border:1px solid rgba(${rgb},0.25);"></div>
+        <div class="geo-ring-2" style="position:absolute;inset:${sz * 0.2}px;border-radius:50%;background:rgba(${rgb},0.14);border:1px solid rgba(${rgb},0.4);"></div>
+        <div class="geo-core" style="position:absolute;top:${coreOff}px;left:${coreOff}px;width:${coreSize}px;height:${coreSize}px;border-radius:50%;background:${hex};box-shadow:0 0 ${selected ? 12 : 8}px rgba(${rgb},0.8);border:${selected ? 2 : 1.5}px solid rgba(255,255,255,0.85);"></div>
+      </div>
+    `,
+  });
+}
+
+// ── GeoJSON country layer ──────────────────────────────────────────────────────
+function CountryLayer({
+  geoJSON,
+  zones,
+  selected,
+}: {
+  geoJSON: FeatureCollection | null;
+  zones: ConflictZone[];
+  selected: ConflictZone | null;
+}) {
+  const layerKey = selected?.id ?? 'none';
+
+  const buildMaps = useMemo(() => {
+    const direct: Record<string, ConflictZone> = {};
+    const affected: Record<string, ConflictZone> = {};
+    zones.forEach((z) => {
+      z.directCountries.forEach((id) => { direct[id] = z; });
+      z.affectedCountries.forEach((id) => { if (!direct[id]) affected[id] = z; });
+    });
+    return { direct, affected };
+  }, [zones]);
+
+  const styleFunc = useCallback((feature?: Feature) => {
+    const id = String(feature?.id ?? '');
+    const { direct, affected } = buildMaps;
+
+    if (direct[id]) {
+      const { hex } = SEV[direct[id].severity];
+      const isSelected = selected?.id === direct[id].id;
+      return {
+        fillColor: hex,
+        fillOpacity: isSelected ? 0.42 : 0.22,
+        color: hex,
+        weight: isSelected ? 2 : 1.2,
+        opacity: isSelected ? 0.9 : 0.6,
+        dashArray: undefined as string | undefined,
+      };
+    }
+    if (affected[id]) {
+      const { hex } = SEV[affected[id].severity];
+      const isSelected = selected?.id === affected[id].id;
+      return {
+        fillColor: hex,
+        fillOpacity: isSelected ? 0.14 : 0.07,
+        color: hex,
+        weight: isSelected ? 1 : 0.5,
+        opacity: isSelected ? 0.5 : 0.25,
+        dashArray: '5,5',
+      };
+    }
+    return { fillColor: 'transparent', fillOpacity: 0, color: 'transparent', weight: 0, opacity: 0 };
+  }, [buildMaps, selected]);
+
+  if (!geoJSON) return null;
+  return (
+    <LeafletGeoJSON
+      key={layerKey}
+      data={geoJSON}
+      style={styleFunc}
+    />
+  );
+}
+
+// ── Direction badge ────────────────────────────────────────────────────────────
+function DirBadge({ d }: { d: ConflictStock['direction'] }) {
+  const cfg = {
     up:       { icon: '↑', cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
     down:     { icon: '↓', cls: 'text-red-400 bg-red-500/10 border-red-500/20' },
     volatile: { icon: '⚡', cls: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20' },
     neutral:  { icon: '→', cls: 'text-zinc-400 bg-zinc-500/10 border-zinc-500/20' },
-  };
-  const { icon, cls } = map[direction];
-  return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold ${cls}`}>{icon}</span>
-  );
+  }[d];
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded border font-bold shrink-0 ${cfg.cls}`}>{cfg.icon}</span>;
 }
 
-// ── Conflict marker ───────────────────────────────────────────────────────────
-function ConflictMarker({
-  zone,
-  selected,
-  onClick,
-}: {
-  zone: ConflictZone;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const { color } = SEV[zone.severity];
-  const outerR = selected ? 22 : zone.severity === 'critical' ? 18 : zone.severity === 'high' ? 14 : 11;
-  const coreR  = selected ? 7  : zone.severity === 'critical' ? 5.5 : zone.severity === 'high' ? 4.5 : 3.5;
-
-  return (
-    <Marker coordinates={zone.coordinates} onClick={onClick}>
-      <g style={{ cursor: 'pointer' }}>
-        {/* Outer pulse ring */}
-        <circle
-          r={outerR}
-          fill={color}
-          fillOpacity={0.08}
-          stroke={color}
-          strokeWidth={0.5}
-          strokeOpacity={0.2}
-          className="conflict-ring-1"
-        />
-        {/* Middle pulse ring */}
-        <circle
-          r={outerR * 0.6}
-          fill={color}
-          fillOpacity={0.12}
-          stroke={color}
-          strokeWidth={0.8}
-          strokeOpacity={0.35}
-          className="conflict-ring-2"
-        />
-        {/* Core dot */}
-        <circle
-          r={coreR}
-          fill={color}
-          fillOpacity={selected ? 1 : 0.9}
-          stroke="#fff"
-          strokeWidth={selected ? 1.2 : 0.6}
-          strokeOpacity={0.8}
-          className="conflict-core"
-        />
-        {/* Selected outer glow ring */}
-        {selected && (
-          <circle
-            r={outerR + 6}
-            fill="none"
-            stroke={color}
-            strokeWidth={1.5}
-            strokeOpacity={0.5}
-            strokeDasharray="4 3"
-          />
-        )}
-      </g>
-    </Marker>
-  );
-}
-
-// ── Stock row ─────────────────────────────────────────────────────────────────
-function StockRow({
-  stock,
-  price,
-}: {
-  stock: ConflictStock;
-  price?: StockPrice;
-}) {
+// ── Stock row ──────────────────────────────────────────────────────────────────
+function StockRow({ stock, price }: { stock: ConflictStock; price?: StockPrice }) {
   const navigate = useNavigate();
-
   return (
     <button
       onClick={() => navigate(`/stock/${stock.ticker}`)}
-      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg bg-surface-2/50 hover:bg-surface-2 border border-border hover:border-zinc-600 transition-all duration-150 group"
+      className="w-full text-left px-3 py-2.5 rounded-xl border border-border bg-surface-2/40 hover:bg-surface-2 hover:border-zinc-600 transition-all duration-150 group"
     >
-      <div className="flex items-center gap-2.5 min-w-0">
-        <DirectionBadge direction={stock.direction} />
-        <div className="min-w-0 text-left">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-bold text-white font-mono group-hover:text-violet-400 transition-colors">
-              {stock.ticker}
-            </span>
-            <span className="text-[9px] text-zinc-600 bg-surface-3 px-1.5 py-0.5 rounded border border-border hidden sm:block">
-              {stock.sector}
-            </span>
+      <div className="flex items-start gap-2.5">
+        <DirBadge d={stock.direction} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-xs font-bold text-white font-mono group-hover:text-violet-400 transition-colors">{stock.ticker}</span>
+              <span className="text-[9px] text-zinc-600 border border-border rounded px-1 hidden sm:block">{stock.sector}</span>
+            </div>
+            {/* Live price */}
+            <div className="text-right shrink-0">
+              {price?.loading ? (
+                <div className="h-3 w-12 bg-zinc-700 rounded animate-pulse" />
+              ) : price && price.price > 0 ? (
+                <div>
+                  <div className="text-[11px] font-bold text-white">${price.price.toFixed(2)}</div>
+                  <div className={`text-[9px] font-semibold ${price.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {price.changePercent >= 0 ? '+' : ''}{price.changePercent.toFixed(2)}%
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
-          <div className="text-[10px] text-zinc-500 truncate mt-0.5">{stock.name}</div>
+          <p className="text-[10px] text-zinc-500 mt-0.5 leading-snug line-clamp-1">{stock.reason}</p>
         </div>
-      </div>
-
-      <div className="text-right shrink-0">
-        {price?.loading ? (
-          <div className="space-y-1">
-            <div className="h-3 w-14 bg-zinc-700 rounded animate-pulse" />
-            <div className="h-2.5 w-10 bg-zinc-800 rounded animate-pulse ml-auto" />
-          </div>
-        ) : price && price.price > 0 ? (
-          <>
-            <div className="text-xs font-bold text-white">
-              ${price.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-            <div className={`text-[10px] font-semibold ${price.changePercent >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {price.changePercent >= 0 ? '+' : ''}{price.changePercent.toFixed(2)}%
-            </div>
-          </>
-        ) : (
-          <span className="text-[10px] text-zinc-700">—</span>
-        )}
       </div>
     </button>
   );
 }
 
-// ── Conflict detail panel ─────────────────────────────────────────────────────
-function ConflictPanel({
-  zones,
-  selected,
-  onSelect,
+// ── Zone list item ─────────────────────────────────────────────────────────────
+function ZoneListItem({ zone, isSelected, onClick }: { zone: ConflictZone; isSelected: boolean; onClick: () => void }) {
+  const s = SEV[zone.severity];
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-3 py-3 rounded-xl border transition-all duration-150 group ${
+        isSelected
+          ? 'bg-surface-2 border-zinc-600'
+          : 'border-border bg-surface-1 hover:bg-surface-2 hover:border-zinc-700'
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <div className="relative shrink-0">
+          <div className={`w-2.5 h-2.5 rounded-full ${s.dot}`} />
+          <div className={`absolute inset-0 w-2.5 h-2.5 rounded-full ${s.dot} animate-ping opacity-40`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-semibold text-zinc-200 group-hover:text-white transition-colors truncate">{zone.name}</div>
+          <div className="text-[9px] text-zinc-600 mt-0.5">{zone.region} · {zone.status}</div>
+        </div>
+        <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold shrink-0 ${s.badge}`}>{s.label}</span>
+      </div>
+    </button>
+  );
+}
+
+// ── Detail panel ───────────────────────────────────────────────────────────────
+function DetailPanel({
+  zone,
+  onBack,
   stockPrices,
 }: {
-  zones: ConflictZone[];
-  selected: ConflictZone | null;
-  onSelect: (z: ConflictZone) => void;
+  zone: ConflictZone;
+  onBack: () => void;
   stockPrices: Record<string, StockPrice>;
 }) {
+  const s = SEV[zone.severity];
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {selected ? (
-        /* ── Detail view ── */
-        <div className="flex flex-col h-full overflow-hidden animate-sweep-in">
-          {/* Header */}
-          <div className="px-4 pt-4 pb-3 border-b border-border shrink-0">
-            <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="min-w-0">
-                <h2 className="text-sm font-bold text-white leading-tight">{selected.name}</h2>
-                <div className="text-[10px] text-zinc-500 mt-0.5">{selected.region}</div>
-              </div>
-              <button
-                onClick={() => onSelect(selected)} // will be overridden by parent
-                className="text-zinc-600 hover:text-zinc-400 text-lg leading-none shrink-0 transition-colors"
-                style={{ display: 'none' }}
-              />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={`text-[10px] px-2 py-0.5 rounded-full border font-bold tracking-wide ${SEV[selected.severity].badge}`}>
-                {SEV[selected.severity].label}
-              </span>
-              <span className="text-[10px] text-zinc-400 bg-surface-2 px-2 py-0.5 rounded border border-border">
-                {selected.status}
-              </span>
-              <span className="text-[10px] text-zinc-600">Since {selected.startDate}</span>
-            </div>
+    <div className="flex flex-col h-full overflow-hidden animate-sweep-in">
+      {/* Header */}
+      <div className="px-4 pt-3 pb-3 border-b border-border shrink-0">
+        <button onClick={onBack} className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 mb-2 transition-colors">
+          ← All conflicts
+        </button>
+        <h2 className="text-sm font-bold text-white leading-tight">{zone.name}</h2>
+        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+          <span className={`text-[10px] px-2 py-0.5 rounded-full border font-bold ${s.badge}`}>{s.label}</span>
+          <span className="text-[10px] text-zinc-500 bg-surface-2 px-2 py-0.5 rounded border border-border">{zone.status}</span>
+          <span className="text-[10px] text-zinc-700">{zone.region}</span>
+        </div>
+
+        {/* Risk bar */}
+        <div className="mt-2.5 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] text-zinc-600 uppercase tracking-wider">Risk Level</span>
+            <span className="text-[9px] text-zinc-500">Since {zone.startDate}</span>
           </div>
-
-          {/* Scrollable body */}
-          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-            {/* Description */}
-            <div className="space-y-2">
-              <p className="text-xs text-zinc-300 leading-relaxed">{selected.description}</p>
-              <p className="text-[11px] text-zinc-500 leading-relaxed">{selected.detail}</p>
-            </div>
-
-            {/* Stats row */}
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-surface-2 rounded-lg border border-border p-2.5 text-center">
-                <div className="text-[9px] text-zinc-600 uppercase tracking-wider mb-1">Casualties</div>
-                <div className={`text-sm font-bold ${selected.casualties === 'N/A' ? 'text-zinc-500' : 'text-red-400'}`}>
-                  {selected.casualties}
-                </div>
-              </div>
-              <div className="bg-surface-2 rounded-lg border border-border p-2.5 text-center">
-                <div className="text-[9px] text-zinc-600 uppercase tracking-wider mb-1">Countries</div>
-                <div className="text-sm font-bold text-white">{selected.affectedCountries.length}</div>
-              </div>
-            </div>
-
-            {/* Market impact */}
-            <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-3 space-y-1.5">
-              <div className="flex items-center gap-1.5">
-                <div className="w-1 h-1 rounded-full bg-violet-400" />
-                <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">Market Impact</span>
-              </div>
-              <p className="text-[11px] text-zinc-300 leading-relaxed">{selected.marketImpact}</p>
-            </div>
-
-            {/* Stocks */}
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="h-px flex-1 bg-border" />
-                <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-semibold">
-                  Affected Stocks
-                </span>
-                <div className="h-px flex-1 bg-border" />
-              </div>
-              <div className="space-y-1.5">
-                {selected.stocks.map((s) => (
-                  <StockRow
-                    key={s.ticker}
-                    stock={s}
-                    price={stockPrices[s.ticker]}
-                  />
-                ))}
-              </div>
-            </div>
+          <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
+            <div className={`h-full rounded-full ${s.bar} ${s.barW} transition-all duration-500`} />
           </div>
         </div>
-      ) : (
-        /* ── List view ── */
-        <div className="flex flex-col h-full overflow-hidden">
-          <div className="px-4 pt-4 pb-3 border-b border-border shrink-0">
-            <h2 className="text-sm font-bold text-white">Active Conflict Zones</h2>
-            <p className="text-[10px] text-zinc-600 mt-0.5">Click a zone on the map or list below</p>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-            {zones.map((z) => (
-              <button
-                key={z.id}
-                onClick={() => onSelect(z)}
-                className="w-full text-left px-3 py-2.5 rounded-xl border border-border bg-surface-1 hover:bg-surface-2 hover:border-zinc-600 transition-all duration-150 group"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="relative shrink-0">
-                    <div className={`w-2.5 h-2.5 rounded-full ${SEV[z.severity].dot}`} />
-                    <div className={`absolute inset-0 w-2.5 h-2.5 rounded-full ${SEV[z.severity].dot} animate-ping opacity-50`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-semibold text-zinc-200 group-hover:text-white transition-colors truncate">
-                        {z.name}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[9px] text-zinc-600">{z.region}</span>
-                      <span className="text-[9px] text-zinc-700">·</span>
-                      <span className="text-[9px] text-zinc-600">{z.status}</span>
-                    </div>
-                  </div>
-                  <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold shrink-0 ${SEV[z.severity].badge}`}>
-                    {SEV[z.severity].label}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
+      </div>
 
-          {/* Legend */}
-          <div className="px-4 py-3 border-t border-border shrink-0 space-y-1.5">
-            <div className="text-[9px] text-zinc-700 uppercase tracking-widest font-semibold mb-2">Severity Legend</div>
-            {(Object.entries(SEV) as [Severity, typeof SEV[Severity]][]).map(([key, val]) => (
-              <div key={key} className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${val.dot}`} />
-                <span className="text-[10px] text-zinc-500">{val.label}</span>
+      {/* Scrollable body */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+
+        {/* Description */}
+        <p className="text-xs text-zinc-300 leading-relaxed">{zone.description}</p>
+        <p className="text-[11px] text-zinc-500 leading-relaxed">{zone.detail}</p>
+
+        {/* Stats grid */}
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            { label: 'Casualties', value: zone.casualties, color: zone.casualties === 'N/A' ? 'text-zinc-500' : 'text-red-400' },
+            { label: 'Displaced', value: zone.displaced, color: zone.displaced === 'N/A' ? 'text-zinc-500' : 'text-orange-400' },
+          ].map(({ label, value, color }) => (
+            <div key={label} className="bg-surface-2 rounded-xl border border-border p-3 text-center">
+              <div className="text-[9px] text-zinc-600 uppercase tracking-wider mb-1">{label}</div>
+              <div className={`text-sm font-bold ${color}`}>{value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Affected countries */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
+            <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+              Direct ({zone.directCountries.length}) · Affected ({zone.affectedCountries.length})
+            </span>
+          </div>
+          <div className="text-[10px] text-zinc-600 bg-surface-2 rounded-xl border border-border px-3 py-2 leading-relaxed">
+            Shaded on map · <span className="text-zinc-500">Solid = direct combat zone · Dashed = economic/political impact</span>
+          </div>
+        </div>
+
+        {/* Market impact */}
+        <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-3 space-y-2">
+          <div className="flex items-center gap-1.5">
+            <div className="w-1 h-1 rounded-full bg-violet-400" />
+            <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">Market Impact</span>
+          </div>
+          <p className="text-[11px] text-zinc-300 leading-relaxed">{zone.marketImpact}</p>
+        </div>
+
+        {/* Trade routes */}
+        {zone.tradeRoutes.length > 0 && (
+          <div className="space-y-1.5">
+            <span className="text-[9px] text-zinc-600 uppercase tracking-wider font-semibold">Trade Routes at Risk</span>
+            {zone.tradeRoutes.map((r) => (
+              <div key={r} className="flex items-start gap-2 text-[11px] text-zinc-400">
+                <span className="text-zinc-700 mt-0.5 shrink-0">▸</span>
+                {r}
               </div>
             ))}
           </div>
+        )}
+
+        {/* Stocks */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-[9px] text-zinc-600 uppercase tracking-widest font-semibold">Affected Stocks</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+          <div className="space-y-1.5">
+            {zone.stocks.map((s) => (
+              <StockRow key={s.ticker} stock={s} price={stockPrices[s.ticker]} />
+            ))}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
-// ── Main GeoRisk page ─────────────────────────────────────────────────────────
+// ── Main page ──────────────────────────────────────────────────────────────────
 export function GeoRisk() {
-  const [selected, setSelected] = useState<ConflictZone | null>(null);
+  const [selected, setSelected]       = useState<ConflictZone | null>(null);
   const [stockPrices, setStockPrices] = useState<Record<string, StockPrice>>({});
-  const [mapPosition, setMapPosition] = useState<{ coordinates: [number, number]; zoom: number }>({
-    coordinates: [10, 15],
-    zoom: 1,
-  });
-  const [_showPanel, setShowPanel] = useState(false);
+  const [worldGeo, setWorldGeo]       = useState<FeatureCollection | null>(null);
   const fetchedRef = useRef<Set<string>>(new Set());
 
-  // Fetch stock prices when a zone is selected
+  // Load world topology once
+  useEffect(() => {
+    fetch(GEO_URL)
+      .then((r) => r.json())
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then((topo: any) => {
+        const key = Object.keys(topo.objects)[0];
+        const geo = topojson.feature(topo, topo.objects[key]) as unknown as FeatureCollection;
+        setWorldGeo(geo);
+      })
+      .catch(console.error);
+  }, []);
+
+  // Fetch stock prices when zone selected
   useEffect(() => {
     if (!selected) return;
     selected.stocks.forEach(({ ticker }) => {
       if (fetchedRef.current.has(ticker)) return;
       fetchedRef.current.add(ticker);
-      setStockPrices((prev) => ({
-        ...prev,
-        [ticker]: { price: 0, change: 0, changePercent: 0, loading: true },
-      }));
+      setStockPrices((p) => ({ ...p, [ticker]: { price: 0, change: 0, changePercent: 0, loading: true } }));
       getStockDetail(ticker)
         .then((raw: unknown) => {
           const d = raw as Record<string, number>;
-          setStockPrices((prev) => ({
-            ...prev,
-            [ticker]: {
-              price: d?.price ?? d?.current_price ?? 0,
-              change: d?.change ?? 0,
-              changePercent: d?.change_pct ?? d?.changePercent ?? 0,
-              loading: false,
-            },
+          setStockPrices((p) => ({
+            ...p,
+            [ticker]: { price: d?.price ?? d?.current_price ?? 0, change: d?.change ?? 0, changePercent: d?.change_pct ?? d?.changePercent ?? 0, loading: false },
           }));
         })
-        .catch(() => {
-          setStockPrices((prev) => ({
-            ...prev,
-            [ticker]: { price: 0, change: 0, changePercent: 0, loading: false },
-          }));
-        });
+        .catch(() => setStockPrices((p) => ({ ...p, [ticker]: { price: 0, change: 0, changePercent: 0, loading: false } })));
     });
   }, [selected]);
 
-  const handleSelectZone = useCallback((zone: ConflictZone) => {
-    setSelected((prev) => (prev?.id === zone.id ? null : zone));
-    setShowPanel(true);
-  }, []);
-
-  const handleDeselect = useCallback(() => {
-    setSelected(null);
-  }, []);
-
-  // Country fill color
-  const getCountryFill = useCallback((geoId: string | number | undefined) => {
-    if (!geoId) return '#161622';
-    const id = String(geoId);
-    // Check if this country is in ANY conflict zone
-    for (const zone of CONFLICT_ZONES) {
-      if (zone.affectedCountries.includes(id)) {
-        const isSelected = selected?.id === zone.id;
-        const { color } = SEV[zone.severity];
-        return isSelected
-          ? `${color}55`   // ~33% opacity when selected
-          : `${color}18`;  // ~10% opacity always
-      }
-    }
-    return selected ? '#12121e' : '#161622';
-  }, [selected]);
+  const handleSelect  = useCallback((z: ConflictZone) => setSelected((prev) => prev?.id === z.id ? null : z), []);
+  const handleDeselect = useCallback(() => setSelected(null), []);
 
   const criticalCount  = CONFLICT_ZONES.filter(z => z.severity === 'critical').length;
   const highCount      = CONFLICT_ZONES.filter(z => z.severity === 'high').length;
   const mediumCount    = CONFLICT_ZONES.filter(z => z.severity === 'medium').length;
   const monitorCount   = CONFLICT_ZONES.filter(z => z.severity === 'monitoring').length;
 
+  const mapEl = (
+    <MapContainer
+      center={[15, 10]}
+      zoom={2}
+      minZoom={2}
+      maxZoom={12}
+      style={{ width: '100%', height: '100%' }}
+      zoomControl={true}
+      attributionControl={true}
+      worldCopyJump={true}
+    >
+      <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxZoom={19} subdomains="abcd" />
+      <FlyToZone zone={selected} />
+      <CountryLayer geoJSON={worldGeo} zones={CONFLICT_ZONES} selected={selected} />
+      {CONFLICT_ZONES.map((z) => (
+        <Marker
+          key={z.id}
+          position={[z.coordinates[1], z.coordinates[0]]}
+          icon={createMarkerIcon(z, selected?.id === z.id)}
+          eventHandlers={{ click: () => handleSelect(z) }}
+          zIndexOffset={selected?.id === z.id ? 1000 : 0}
+        >
+          <Popup className="conflict-popup">
+            <div className="px-3 py-2.5 min-w-[200px]">
+              <div className="flex items-center gap-2 mb-1">
+                <div className={`w-2 h-2 rounded-full ${SEV[z.severity].dot}`} />
+                <span className="text-xs font-bold text-white">{z.name}</span>
+              </div>
+              <p className="text-[10px] text-zinc-400 leading-snug">{z.description.slice(0, 100)}…</p>
+              <div className="flex items-center gap-2 mt-2">
+                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${SEV[z.severity].badge}`}>{SEV[z.severity].label}</span>
+                <span className="text-[9px] text-zinc-600">{z.status}</span>
+              </div>
+            </div>
+          </Popup>
+        </Marker>
+      ))}
+    </MapContainer>
+  );
+
   return (
     <div className="flex-1 overflow-hidden" style={{ height: 'calc(100vh - 56px)' }}>
 
-      {/* ── Desktop: side-by-side ── */}
+      {/* ── Desktop ── */}
       <div className="hidden lg:flex h-full">
 
-        {/* Map area */}
-        <div className="flex-1 min-w-0 relative overflow-hidden bg-[#06060f]">
-
-          {/* Top status bar */}
-          <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-5 py-3 bg-gradient-to-b from-[#06060f] via-[#06060f]/80 to-transparent pointer-events-none">
+        {/* Map */}
+        <div className="flex-1 min-w-0 relative overflow-hidden">
+          {/* Status bar overlay */}
+          <div className="absolute top-0 left-0 right-0 z-[500] pointer-events-none flex items-center justify-between px-4 py-2.5
+            bg-gradient-to-b from-[#06060f]/95 via-[#06060f]/60 to-transparent">
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5">
                 <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
                 <span className="text-[11px] font-bold text-red-400 tracking-wider">LIVE</span>
               </div>
-              <span className="text-[11px] text-zinc-500">Global Conflict Risk Monitor</span>
+              <span className="text-[10px] text-zinc-600">Global Conflict & Geo-Risk Monitor</span>
             </div>
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                <span className="text-[10px] text-zinc-600">{criticalCount} Critical</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                <span className="text-[10px] text-zinc-600">{highCount} High</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
-                <span className="text-[10px] text-zinc-600">{mediumCount} Medium</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                <span className="text-[10px] text-zinc-600">{monitorCount} Monitor</span>
-              </div>
+              {([['critical', criticalCount, 'text-red-400'], ['high', highCount, 'text-orange-400'], ['medium', mediumCount, 'text-yellow-400'], ['monitoring', monitorCount, 'text-blue-400']] as const)
+                .filter(([, c]) => c > 0)
+                .map(([sev, count, cls]) => (
+                  <div key={sev} className="flex items-center gap-1">
+                    <div className={`w-1.5 h-1.5 rounded-full ${SEV[sev].dot}`} />
+                    <span className={`text-[10px] font-semibold ${cls}`}>{count}</span>
+                    <span className="text-[10px] text-zinc-700 capitalize">{sev}</span>
+                  </div>
+                ))
+              }
             </div>
           </div>
 
-          {/* SVG Map */}
-          <ComposableMap
-            projection="geoNaturalEarth1"
-            projectionConfig={{ scale: 165, center: [10, 15] }}
-            style={{ width: '100%', height: '100%' }}
-            className="animate-map-fade"
-          >
-            <ZoomableGroup
-              center={mapPosition.coordinates}
-              zoom={mapPosition.zoom}
-              minZoom={1}
-              maxZoom={6}
-              onMoveEnd={setMapPosition}
-            >
-              {/* Ocean */}
-              <Sphere
-                id="rsm-sphere"
-                fill="#080814"
-                stroke="#1a1a2e"
-                strokeWidth={0.3}
-              />
-
-              {/* Lat/lng grid */}
-              <Graticule
-                id="rsm-graticule"
-                stroke="#1a1a2e"
-                strokeWidth={0.3}
-                fill="none"
-              />
-
-              {/* Countries */}
-              <Geographies geography={GEO_URL}>
-                {({ geographies }) =>
-                  geographies.map((geo) => (
-                    <Geography
-                      key={geo.rsmKey}
-                      geography={geo}
-                      fill={getCountryFill(geo.id)}
-                      stroke="#1e1e30"
-                      strokeWidth={0.4}
-                      style={{
-                        default:  { outline: 'none', transition: 'fill 0.3s ease' },
-                        hover:    { outline: 'none', fill: '#222234' },
-                        pressed:  { outline: 'none' },
-                      }}
-                    />
-                  ))
-                }
-              </Geographies>
-
-              {/* Conflict markers */}
-              {CONFLICT_ZONES.map((zone) => (
-                <ConflictMarker
-                  key={zone.id}
-                  zone={zone}
-                  selected={selected?.id === zone.id}
-                  onClick={() => handleSelectZone(zone)}
-                />
-              ))}
-            </ZoomableGroup>
-          </ComposableMap>
+          {mapEl}
 
           {/* Bottom hint */}
-          <div className="absolute bottom-4 left-4 text-[10px] text-zinc-700 pointer-events-none">
-            Scroll to zoom · Drag to pan · Click marker for analysis
+          <div className="absolute bottom-4 left-4 z-[500] pointer-events-none">
+            <div className="flex items-center gap-3 text-[9px] text-zinc-700 bg-black/40 backdrop-blur-sm rounded-lg px-2.5 py-1.5 border border-white/5">
+              <span>🔍 Scroll to zoom</span>
+              <span>✋ Drag to pan</span>
+              <span>📍 Click marker to analyze</span>
+            </div>
           </div>
 
-          {/* Selected zone badge on map */}
+          {/* Selected zone floating tag */}
           {selected && (
-            <div className="absolute bottom-4 right-4 flex items-center gap-2 bg-surface-1/90 backdrop-blur-sm border border-border rounded-xl px-3 py-2 animate-sweep-in">
-              <div className={`w-2 h-2 rounded-full ${SEV[selected.severity].dot}`} />
-              <span className="text-xs font-semibold text-white">{selected.name}</span>
-              <button onClick={handleDeselect} className="text-zinc-600 hover:text-zinc-400 text-xs ml-1 transition-colors">✕</button>
+            <div className="absolute bottom-4 right-4 z-[500] animate-sweep-in">
+              <div className="flex items-center gap-2 bg-surface-1/90 backdrop-blur-sm border border-border rounded-xl px-3 py-2">
+                <div className={`w-2 h-2 rounded-full ${SEV[selected.severity].dot}`} />
+                <span className="text-xs font-semibold text-white">{selected.name}</span>
+                <button onClick={handleDeselect} className="text-zinc-600 hover:text-zinc-400 text-xs ml-1 transition-colors">✕</button>
+              </div>
             </div>
           )}
         </div>
 
-        {/* Side panel */}
+        {/* Sidebar */}
         <div className="w-80 xl:w-96 shrink-0 border-l border-border bg-surface-0 flex flex-col overflow-hidden">
-          {/* Panel header */}
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between shrink-0 bg-surface-1">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-md bg-red-500/15 border border-red-500/30 flex items-center justify-center">
-                <span className="text-[9px]">⚔</span>
-              </div>
-              <span className="text-xs font-bold text-white">Geo-Risk Intel</span>
+          {/* Panel top bar */}
+          <div className="px-4 py-3 border-b border-border bg-surface-1 flex items-center gap-2 shrink-0">
+            <div className="w-5 h-5 rounded-md bg-red-500/15 border border-red-500/25 flex items-center justify-center text-[10px]">⚔</div>
+            <span className="text-xs font-bold text-white">Geo-Risk Intel</span>
+            <div className="ml-auto flex items-center gap-1.5 bg-surface-2 rounded-full px-2 py-0.5 border border-border">
+              <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-[9px] text-zinc-500">{CONFLICT_ZONES.length} zones</span>
             </div>
-            {selected && (
-              <button
-                onClick={handleDeselect}
-                className="text-[10px] text-zinc-500 hover:text-zinc-300 flex items-center gap-1 transition-colors"
-              >
-                ← All zones
-              </button>
-            )}
           </div>
 
-          <ConflictPanel
-            zones={CONFLICT_ZONES}
-            selected={selected}
-            onSelect={handleSelectZone}
-            stockPrices={stockPrices}
-          />
+          {selected ? (
+            <DetailPanel zone={selected} onBack={handleDeselect} stockPrices={stockPrices} />
+          ) : (
+            <div className="flex flex-col h-full overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                {CONFLICT_ZONES.map((z) => (
+                  <ZoneListItem key={z.id} zone={z} isSelected={selected === z} onClick={() => handleSelect(z)} />
+                ))}
+              </div>
+              {/* Legend */}
+              <div className="px-4 py-3 border-t border-border bg-surface-1 shrink-0">
+                <div className="text-[9px] text-zinc-700 uppercase tracking-widest font-semibold mb-2">Legend</div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  {(Object.entries(SEV) as [Severity, typeof SEV[Severity]][]).map(([k, v]) => (
+                    <div key={k} className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${v.dot}`} />
+                      <span className="text-[10px] text-zinc-500">{v.label}</span>
+                    </div>
+                  ))}
+                  <div className="col-span-2 mt-1 pt-1.5 border-t border-border flex items-center gap-4 text-[9px] text-zinc-700">
+                    <span>▬ Direct conflict</span>
+                    <span>╌ Economically affected</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ── Mobile layout ── */}
+      {/* ── Mobile ── */}
       <div className="lg:hidden flex flex-col h-full overflow-hidden">
-
-        {/* Map (top half) */}
-        <div className="relative overflow-hidden bg-[#06060f]" style={{ height: '45%' }}>
-          {/* Status bar */}
-          <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-3 py-2 bg-gradient-to-b from-[#06060f] to-transparent pointer-events-none">
+        {/* Map */}
+        <div className="relative overflow-hidden" style={{ height: '45%' }}>
+          {/* Status */}
+          <div className="absolute top-0 left-0 right-0 z-[500] pointer-events-none flex items-center justify-between px-3 py-2 bg-gradient-to-b from-[#06060f]/90 to-transparent">
             <div className="flex items-center gap-1.5">
               <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
               <span className="text-[9px] font-bold text-red-400">LIVE</span>
             </div>
             <div className="flex items-center gap-2">
               {([['critical', criticalCount], ['high', highCount], ['medium', mediumCount]] as const).map(([sev, count]) => (
-                <div key={sev} className="flex items-center gap-0.5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${SEV[sev].dot}`} />
-                  <span className="text-[9px] text-zinc-600">{count}</span>
-                </div>
+                count > 0 && <div key={sev} className="flex items-center gap-0.5"><span className={`w-1.5 h-1.5 rounded-full ${SEV[sev].dot}`} /><span className="text-[9px] text-zinc-600">{count}</span></div>
               ))}
             </div>
           </div>
-
-          <ComposableMap
-            projection="geoNaturalEarth1"
-            projectionConfig={{ scale: 140, center: [10, 15] }}
-            style={{ width: '100%', height: '100%' }}
-          >
-            <ZoomableGroup center={[10, 15]} zoom={1} minZoom={1} maxZoom={4}>
-              <Sphere id="rsm-sphere-m" fill="#080814" stroke="#1a1a2e" strokeWidth={0.3} />
-              <Graticule id="rsm-graticule-m" stroke="#1a1a2e" strokeWidth={0.3} fill="none" />
-              <Geographies geography={GEO_URL}>
-                {({ geographies }) =>
-                  geographies.map((geo) => (
-                    <Geography
-                      key={geo.rsmKey}
-                      geography={geo}
-                      fill={getCountryFill(geo.id)}
-                      stroke="#1e1e30"
-                      strokeWidth={0.4}
-                      style={{ default: { outline: 'none' }, hover: { outline: 'none' }, pressed: { outline: 'none' } }}
-                    />
-                  ))
-                }
-              </Geographies>
-              {CONFLICT_ZONES.map((zone) => (
-                <ConflictMarker
-                  key={zone.id}
-                  zone={zone}
-                  selected={selected?.id === zone.id}
-                  onClick={() => { handleSelectZone(zone); setShowPanel(true); }}
-                />
-              ))}
-            </ZoomableGroup>
-          </ComposableMap>
-
+          {mapEl}
           {selected && (
-            <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between gap-2 bg-surface-1/90 backdrop-blur-sm border border-border rounded-xl px-3 py-2">
+            <div className="absolute bottom-2 left-2 right-2 z-[500] flex items-center justify-between bg-surface-1/90 backdrop-blur-sm border border-border rounded-xl px-3 py-1.5">
               <div className="flex items-center gap-1.5">
                 <div className={`w-2 h-2 rounded-full ${SEV[selected.severity].dot}`} />
                 <span className="text-xs font-semibold text-white truncate">{selected.name}</span>
               </div>
-              <button onClick={handleDeselect} className="text-zinc-600 text-xs shrink-0">✕</button>
+              <button onClick={handleDeselect} className="text-zinc-600 text-xs ml-2 shrink-0">✕</button>
             </div>
           )}
         </div>
 
-        {/* Panel (bottom half) */}
+        {/* Panel */}
         <div className="flex-1 overflow-hidden border-t border-border bg-surface-0 flex flex-col">
-          <div className="px-4 py-2.5 border-b border-border flex items-center justify-between shrink-0 bg-surface-1">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-white">⚔ Geo-Risk Intel</span>
-            </div>
+          <div className="px-4 py-2.5 border-b border-border bg-surface-1 flex items-center gap-2 shrink-0">
+            <span className="text-xs font-bold text-white">⚔ Geo-Risk Intel</span>
             {selected && (
-              <button
-                onClick={handleDeselect}
-                className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
-              >
-                ← All zones
-              </button>
+              <button onClick={handleDeselect} className="ml-auto text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors">← All</button>
             )}
           </div>
-
-          <ConflictPanel
-            zones={CONFLICT_ZONES}
-            selected={selected}
-            onSelect={handleSelectZone}
-            stockPrices={stockPrices}
-          />
+          {selected ? (
+            <DetailPanel zone={selected} onBack={handleDeselect} stockPrices={stockPrices} />
+          ) : (
+            <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+              {CONFLICT_ZONES.map((z) => (
+                <ZoneListItem key={z.id} zone={z} isSelected={false} onClick={() => handleSelect(z)} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
