@@ -32,6 +32,9 @@ export const getNews = (market?: string, limit = 60) =>
 export const getForex = () =>
   api.get<unknown>('/forex').then((r) => r.data);
 
+export const getLiveIndices = () =>
+  api.get<unknown>('/stocks/indices/live').then((r) => r.data);
+
 export const getCrossMarketEvents = (limit = 20) =>
   api.get<unknown>('/cross-market-events', { params: { limit } }).then((r) => r.data);
 

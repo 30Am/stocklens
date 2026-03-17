@@ -103,6 +103,36 @@ async def get_stock(ticker: str, history_period: str = Query("1mo", description=
     )
 
 
+@router.get("/indices/live", response_model=list[dict])
+async def get_live_indices():
+    """Fetch live index data for NIFTY50, SENSEX, S&P500, NASDAQ."""
+    import yfinance as yf
+    symbols = [
+        ("^NSEI",  "NIFTY 50"),
+        ("^BSESN", "SENSEX"),
+        ("^GSPC",  "S&P 500"),
+        ("^IXIC",  "NASDAQ"),
+    ]
+    results = []
+    for sym, name in symbols:
+        try:
+            t = yf.Ticker(sym)
+            hist = t.history(period="2d")
+            if len(hist) >= 2:
+                prev  = float(hist["Close"].iloc[-2])
+                close = float(hist["Close"].iloc[-1])
+                change_pct = round((close - prev) / prev * 100, 2)
+            elif len(hist) == 1:
+                close = float(hist["Close"].iloc[-1])
+                change_pct = 0.0
+            else:
+                continue
+            results.append({"name": name, "value": round(close, 2), "change_pct": change_pct})
+        except Exception:
+            continue
+    return results
+
+
 @router.get("/{ticker}/prices", response_model=list[PriceOut])
 async def get_price_history(
     ticker: str,

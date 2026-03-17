@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { useMarket } from '../../context/MarketContext';
 import type { IndexData } from '../../types';
 import { MOCK_INDICES } from '../../api/mock';
+import { getLiveIndices } from '../../api/client';
 
 function IndexItem({ idx }: { idx: IndexData }) {
   const pos = idx.change_pct >= 0;
@@ -23,13 +25,22 @@ function IndexItem({ idx }: { idx: IndexData }) {
 
 export function IndexBar({ forex }: { forex: number }) {
   const { nseOpen, nyseOpen } = useMarket();
+  const [indices, setIndices] = useState<IndexData[]>(MOCK_INDICES);
+
+  useEffect(() => {
+    getLiveIndices()
+      .then((data: unknown) => {
+        if (Array.isArray(data) && data.length > 0) setIndices(data as IndexData[]);
+      })
+      .catch(() => { /* keep mock */ });
+  }, []);
 
   return (
     <div className="bg-surface-1 border-b border-border px-4 py-2">
       <div className="max-w-[1600px] mx-auto flex items-center gap-4 lg:gap-8 overflow-x-auto scrollbar-hide">
         {/* Indices */}
         <div className="flex items-center gap-4 lg:gap-8 flex-nowrap">
-          {MOCK_INDICES.map((idx) => (
+          {indices.map((idx) => (
             <IndexItem key={idx.name} idx={idx} />
           ))}
         </div>
