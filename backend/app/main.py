@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.services.data_pipeline import run_all_news, run_forex_update, seed_stock_universe
-from app.services.nlp.pipeline import run_nlp_pipeline
 from app.services.scheduler import start_scheduler, stop_scheduler
 from app.utils.database import init_db
 
@@ -32,7 +31,6 @@ async def lifespan(app: FastAPI):
     for label, coro in [
         ("forex",   run_forex_update()),
         ("news",    run_all_news()),
-        ("nlp",     run_nlp_pipeline()),
     ]:
         try:
             await coro
@@ -84,4 +82,5 @@ async def health():
 @app.post("/run-nlp", tags=["meta"])
 async def trigger_nlp(market: str | None = None):
     """Manually trigger the NLP pipeline."""
+    from app.services.nlp.pipeline import run_nlp_pipeline
     return await run_nlp_pipeline(market=market)
