@@ -2,12 +2,10 @@
 Forex fetcher — USD/INR rate updated hourly.
 
 Primary:  ExchangeRate-API (free, 1500 req/month)
-Fallback1: Frankfurter API (ECB-based, completely free, no key)
-Fallback2: yfinance USDINR=X ticker (uses daily history for reliability)
+Fallback:  Frankfurter API (ECB-based, completely free, no key)
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -41,13 +39,6 @@ async def fetch_usd_inr() -> float:
 
     # Fallback 1: Frankfurter API (ECB rates, no key required)
     rate = await _from_frankfurter()
-    if rate:
-        _cached_rate = rate
-        _cached_at = datetime.now(timezone.utc)
-        return rate
-
-    # Fallback 2: yfinance (uses daily history — more reliable than fast_info)
-    rate = await _from_yfinance()
     if rate:
         _cached_rate = rate
         _cached_at = datetime.now(timezone.utc)
@@ -91,26 +82,6 @@ async def _from_frankfurter() -> float | None:
     except Exception as e:
         log.warning("Frankfurter API failed: %s", e)
         return None
-
-
-async def _from_yfinance() -> float | None:
-    def _sync_fetch() -> float | None:
-        try:
-            import yfinance as yf
-            ticker = yf.Ticker("USDINR=X")
-            # Use daily history instead of fast_info.last_price which is unreliable for FX
-            hist = ticker.history(period="2d")
-            if hist.empty:
-                raise ValueError("empty history")
-            rate = float(hist["Close"].iloc[-1])
-            log.info("forex: USD/INR = %.4f (yfinance fallback)", rate)
-            return rate
-        except Exception as e:
-            log.warning("yfinance forex fallback failed: %s", e)
-            return None
-
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _sync_fetch)
 
 
 def get_cached_rate() -> float:

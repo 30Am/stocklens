@@ -105,31 +105,43 @@ async def get_stock(ticker: str, history_period: str = Query("1mo", description=
 
 @router.get("/indices/live", response_model=list[dict])
 async def get_live_indices():
-    """Fetch live index data for NIFTY50, SENSEX, S&P500, NASDAQ."""
-    import yfinance as yf
+    """Fetch live index data for NIFTY50, SENSEX, S&P500, NASDAQ via Yahoo Finance JSON API."""
+    import httpx
     symbols = [
         ("^NSEI",  "NIFTY 50"),
         ("^BSESN", "SENSEX"),
         ("^GSPC",  "S&P 500"),
         ("^IXIC",  "NASDAQ"),
     ]
+    _url = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+    _hdrs = {"User-Agent": "Mozilla/5.0 (compatible; StockLens/4.0)"}
     results = []
-    for sym, name in symbols:
-        try:
-            t = yf.Ticker(sym)
-            hist = t.history(period="2d")
-            if len(hist) >= 2:
-                prev  = float(hist["Close"].iloc[-2])
-                close = float(hist["Close"].iloc[-1])
-                change_pct = round((close - prev) / prev * 100, 2)
-            elif len(hist) == 1:
-                close = float(hist["Close"].iloc[-1])
-                change_pct = 0.0
-            else:
+    async with httpx.AsyncClient() as client:
+        for sym, name in symbols:
+            try:
+                resp = await client.get(
+                    _url.format(sym=sym),
+                    params={"interval": "1d", "range": "5d"},
+                    headers=_hdrs,
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                result = (data.get("chart", {}).get("result") or [])
+                if not result:
+                    continue
+                closes = result[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                closes = [c for c in closes if c is not None]
+                if len(closes) >= 2:
+                    prev, close = closes[-2], closes[-1]
+                    change_pct = round((close - prev) / prev * 100, 2)
+                elif closes:
+                    close, change_pct = closes[-1], 0.0
+                else:
+                    continue
+                results.append({"name": name, "value": round(close, 2), "change_pct": change_pct})
+            except Exception:
                 continue
-            results.append({"name": name, "value": round(close, 2), "change_pct": change_pct})
-        except Exception:
-            continue
     return results
 
 
