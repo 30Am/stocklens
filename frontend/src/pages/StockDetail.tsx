@@ -61,10 +61,19 @@ export function StockDetail() {
           setStock(d);
           setChartData(history);
         } else {
-          const mock = mockStockDetail(ticker);
-          // Prefer live values from API where available, but use mock chart + stats
+          const mock = mockStockDetail(ticker!);
+          // Always use the API's identity fields (ticker, name, market, currency, exchange)
+          // so we never show the wrong company name. Use mock only for chart + stats fallback.
           const merged: StockDetailType = {
             ...mock,
+            // Identity from API — never let mock override these
+            ticker: d.ticker ?? mock.ticker,
+            name: d.name ?? mock.name,
+            exchange: d.exchange ?? mock.exchange,
+            market: d.market ?? mock.market,
+            currency: d.currency ?? mock.currency,
+            sector: d.sector ?? mock.sector,
+            // Live values from API where available
             close: d.close ?? mock.close,
             change_pct: d.change_pct ?? mock.change_pct,
             signal: d.signal ?? mock.signal,

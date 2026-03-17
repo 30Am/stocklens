@@ -100,19 +100,53 @@ export function generateCandleData(basePrice: number, count = 90): PriceCandle[]
 }
 
 export function mockStockDetail(ticker: string): StockDetail {
-  const base = MOCK_STOCKS.find((s) => s.ticker === ticker) ?? MOCK_STOCKS[0];
-  const history = generateCandleData(base.close ?? 1000);
+  // Try to find an exact match in mock stocks first
+  const known = MOCK_STOCKS.find((s) => s.ticker === ticker);
+  if (known) {
+    const history = generateCandleData(known.close ?? 1000);
+    return {
+      ...known,
+      open: known.close ? known.close * 0.99 : null,
+      high: known.close ? known.close * 1.025 : null,
+      low: known.close ? known.close * 0.975 : null,
+      volume: 8_400_000,
+      week52_high: known.close ? known.close * 1.22 : null,
+      week52_low: known.close ? known.close * 0.73 : null,
+      market_cap: known.close ? known.close * 1_200_000 : null,
+      pe_ratio: 28.4,
+      price_history: history,
+      related_news: MOCK_NEWS.filter((n) => n.market === known.market).slice(0, 3),
+    };
+  }
+
+  // Generate a ticker-specific placeholder — never fall back to Reliance
+  const isIndian = ticker.endsWith('.NS') || ticker.endsWith('.BO');
+  const market = isIndian ? ('IN' as const) : ('US' as const);
+  const currency = isIndian ? ('INR' as const) : ('USD' as const);
+  const cleanName = ticker.replace('.NS', '').replace('.BO', '');
+  const basePrice = isIndian ? 500 : 150;
+  const history = generateCandleData(basePrice);
   return {
-    ...base,
-    open: base.close ? base.close * 0.99 : null,
-    high: base.close ? base.close * 1.025 : null,
-    low: base.close ? base.close * 0.975 : null,
-    volume: 8_400_000,
-    week52_high: base.close ? base.close * 1.22 : null,
-    week52_low: base.close ? base.close * 0.73 : null,
-    market_cap: base.close ? base.close * 1_200_000 : null,
-    pe_ratio: 28.4,
+    ticker,
+    name: cleanName,
+    exchange: isIndian ? 'NSE' : 'NYSE',
+    sector: null,
+    market,
+    currency,
+    close: basePrice,
+    change_pct: 0,
+    signal: 'HOLD',
+    score: 0,
+    reason: null,
+    open: basePrice * 0.99,
+    high: basePrice * 1.025,
+    low: basePrice * 0.975,
+    volume: null,
+    week52_high: null,
+    week52_low: null,
+    market_cap: null,
+    pe_ratio: null,
     price_history: history,
-    related_news: MOCK_NEWS.filter((n) => n.market === base.market).slice(0, 3),
+    related_news: MOCK_NEWS.filter((n) => n.market === market).slice(0, 3),
   };
 }
