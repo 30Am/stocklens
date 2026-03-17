@@ -38,6 +38,16 @@ export const getLiveIndices = () =>
 export const getCrossMarketEvents = (limit = 20) =>
   api.get<unknown>('/cross-market-events', { params: { limit } }).then((r) => r.data);
 
+export interface StockSearchResult {
+  ticker: string;
+  name: string;
+  market: 'IN' | 'US' | string;
+  exchange: string;
+}
+
+export const searchStocks = (q: string) =>
+  api.get<StockSearchResult[]>('/stocks/search', { params: { q } }).then((r) => r.data);
+
 export interface ChatResult {
   reply: string;
   tickers_mentioned: string[];

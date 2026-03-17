@@ -4,7 +4,7 @@ import { WS_BASE } from '../api/client';
 export function useWebSocket<T>(path: string, onMessage: (data: T) => void, enabled = true) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
 
