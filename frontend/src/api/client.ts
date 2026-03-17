@@ -29,6 +29,29 @@ export const getTrending = (market?: string, limit = 12) =>
 export const getNews = (market?: string, limit = 60) =>
   api.get<unknown>('/news', { params: { market, limit } }).then((r) => r.data);
 
+export interface StockImpact {
+  ticker: string;
+  company_name: string;
+  impact: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+  magnitude: 'HIGH' | 'MEDIUM' | 'LOW';
+  analysis: string;
+}
+
+export interface NewsAnalysis {
+  id: number;
+  headline: string;
+  source: string | null;
+  url: string | null;
+  market: string | null;
+  published: string | null;
+  full_text: string;
+  tickers: string[];
+  stock_impacts: StockImpact[];
+}
+
+export const getNewsAnalysis = (id: number) =>
+  api.get<NewsAnalysis>(`/news/${id}/analysis`).then((r) => r.data);
+
 export const getForex = () =>
   api.get<unknown>('/forex').then((r) => r.data);
 
