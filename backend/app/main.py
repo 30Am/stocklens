@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.services.data_pipeline import run_all_news, run_forex_update, seed_stock_universe
+from app.services.data_pipeline import run_forex_update, seed_stock_universe
 from app.services.scheduler import start_scheduler, stop_scheduler
 from app.utils.database import init_db
 
@@ -28,14 +28,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error("DB init failed (will retry on next request): %s", e)
 
-    for label, coro in [
-        ("forex",   run_forex_update()),
-        ("news",    run_all_news()),
-    ]:
-        try:
-            await coro
-        except Exception as e:
-            log.warning("startup %s failed: %s", label, e)
+    # Only fetch forex on startup — news + NLP handled by scheduler
+    try:
+        await run_forex_update()
+    except Exception as e:
+        log.warning("startup forex failed: %s", e)
 
     await start_scheduler()
     yield
