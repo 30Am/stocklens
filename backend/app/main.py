@@ -72,8 +72,7 @@ app.include_router(chat.router)
 # ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["meta"])
 async def health():
-    from app.services.forex_fetcher import get_cached_rate
-    return {"status": "ok", "version": "4.0.0", "usd_inr": get_cached_rate()}
+    return {"status": "ok", "version": "4.0.0"}
 
 
 @app.post("/run-nlp", tags=["meta"])
