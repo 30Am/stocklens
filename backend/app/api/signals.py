@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 from sqlalchemy import desc, func, select
 import asyncio
-import yfinance as yf
+import httpx
 
 from app.models.db import CrossMarketEvent, Signal, Stock
 from app.schemas.signal import CrossMarketEventOut, SignalOut
@@ -11,22 +11,33 @@ from app.utils.database import AsyncSessionLocal
 
 router = APIRouter(tags=["signals"])
 
+_YF_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; StockLens/4.0)"}
+
 
 async def _fetch_price(ticker: str) -> tuple[float | None, float | None]:
-    """Fetch latest close and change_pct from yfinance asynchronously."""
+    """Fetch latest close and change_pct via Yahoo Finance JSON API."""
     try:
-        loop = asyncio.get_event_loop()
-        def _get():
-            t = yf.Ticker(ticker)
-            hist = t.history(period="2d")
-            if len(hist) >= 2:
-                prev = float(hist["Close"].iloc[-2])
-                close = float(hist["Close"].iloc[-1])
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                _YF_CHART.format(ticker=ticker),
+                params={"interval": "1d", "range": "5d"},
+                headers=_HEADERS,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            result = data.get("chart", {}).get("result") or []
+            if not result:
+                return None, None
+            closes = result[0].get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            closes = [c for c in closes if c is not None]
+            if len(closes) >= 2:
+                prev, close = closes[-2], closes[-1]
                 return round(close, 2), round((close - prev) / prev * 100, 2)
-            elif len(hist) == 1:
-                return round(float(hist["Close"].iloc[-1]), 2), 0.0
+            elif closes:
+                return round(closes[-1], 2), 0.0
             return None, None
-        return await loop.run_in_executor(None, _get)
     except Exception:
         return None, None
 
