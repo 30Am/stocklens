@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 
 import feedparser  # type: ignore[import-untyped]
 import httpx
 from sqlalchemy import desc, func, select
 
+from app.core.config import settings
 from app.models.db import NewsArticle, Signal, Stock
 from app.utils.database import AsyncSessionLocal
 
@@ -293,7 +293,7 @@ async def answer(message: str, extra_tickers: list[str] | None = None) -> dict:
     reply: str | None = None
 
     # 1. Try Groq (fast + free tier)
-    groq_key = os.getenv("GROQ_API_KEY", "")
+    groq_key = settings.groq_api_key
     if groq_key and not reply:
         try:
             from groq import AsyncGroq  # type: ignore[import-untyped]
@@ -313,7 +313,7 @@ async def answer(message: str, extra_tickers: list[str] | None = None) -> dict:
             log.warning("[chat] Groq unavailable: %s", e)
 
     # 2. Fallback to OpenAI
-    openai_key = os.getenv("OPENAI_API_KEY", "")
+    openai_key = settings.openai_api_key
     if openai_key and not reply:
         try:
             from openai import AsyncOpenAI  # type: ignore[import-untyped]
