@@ -26,20 +26,23 @@ export function Dashboard() {
           setStocks(data as StockSummary[]);
         }
       })
-      .catch(() => { /* use mock */ })
+      .catch((e) => { console.error('[Dashboard] getTrending failed:', e); })
       .finally(() => setLoading(false));
   }, [market]);
 
   useEffect(() => {
     getCrossMarketEvents(10)
       .then((data: unknown) => { if (Array.isArray(data) && data.length > 0) setCrossEvents(data as CrossMarketEvent[]); })
-      .catch(() => { /* use mock */ });
+      .catch((e) => { console.error('[Dashboard] getCrossMarketEvents failed:', e); });
   }, []);
 
   useEffect(() => {
     getForex()
-      .then((data: unknown) => { if (data && typeof (data as { rate: number }).rate === 'number') setForex((data as { rate: number }).rate); })
-      .catch(() => { /* use mock */ });
+      .then((data: unknown) => {
+        console.log('[Dashboard] getForex response:', data);
+        if (data && typeof (data as { rate: number }).rate === 'number') setForex((data as { rate: number }).rate);
+      })
+      .catch((e) => { console.error('[Dashboard] getForex failed:', e); });
   }, [setForex]);
 
   // Live price updates via WebSocket
