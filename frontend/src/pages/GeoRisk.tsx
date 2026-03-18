@@ -696,8 +696,8 @@ export function GeoRisk() {
     <div className="flex-1 overflow-hidden flex flex-col lg:flex-row" style={{ height: 'calc(100vh - 56px)' }}>
 
       {/* ── Map column ── */}
-      {/* Mobile: 45vh height. Desktop: flex-1 fills remaining width at full height */}
-      <div className="relative overflow-hidden flex-shrink-0 h-[45vh] lg:flex-1 lg:h-full lg:min-w-0">
+      {/* Mobile: 45vh. Desktop: explicit calc matches outer wrapper — avoids height:100% inheritance failure in flex children */}
+      <div className="relative overflow-hidden flex-shrink-0 h-[45vh] lg:flex-1 lg:h-[calc(100vh-56px)] lg:min-w-0">
         {/* Status bar */}
         <div className="absolute top-0 left-0 right-0 z-[500] pointer-events-none flex items-center justify-between px-3 lg:px-4 py-2 lg:py-2.5 bg-gradient-to-b from-[#06060f]/95 via-[#06060f]/60 to-transparent">
           <div className="flex items-center gap-2">
