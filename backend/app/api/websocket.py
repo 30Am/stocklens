@@ -95,9 +95,13 @@ async def ws_prices(websocket: WebSocket):
     """
     await manager.connect_prices(websocket)
     try:
-        # Send current snapshot on connect
-        snapshot = await _build_price_snapshot()
-        await websocket.send_text(json.dumps(snapshot, default=str))
+        # Send current snapshot on connect — catch DB errors gracefully so the
+        # connection stays open even if the snapshot query fails (e.g. cold start)
+        try:
+            snapshot = await _build_price_snapshot()
+            await websocket.send_text(json.dumps(snapshot, default=str))
+        except Exception as snap_err:
+            log.warning("WS prices: snapshot failed (connection kept open): %s", snap_err)
 
         # Keep connection alive; updates pushed by broadcast_prices()
         while True:
@@ -109,6 +113,10 @@ async def ws_prices(websocket: WebSocket):
     except Exception as e:
         log.warning("WS prices error: %s", e)
         manager.disconnect_prices(websocket)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @router.websocket("/ws/news")
