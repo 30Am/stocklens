@@ -687,25 +687,8 @@ export function GeoRisk() {
     <div className="flex-1 overflow-hidden flex flex-col lg:flex-row" style={{ height: 'calc(100vh - 56px)' }}>
 
       {/* ── Map column ── */}
-      {/* Mobile: 45% height. Desktop: fills remaining width at full height */}
-      <div
-        className="relative overflow-hidden flex-shrink-0 lg:flex-1 lg:min-w-0"
-        style={{ height: '45%' }}
-        // Override height on desktop via inline style + class combo
-        ref={(el) => {
-          if (el) {
-            const applyHeight = () => {
-              el.style.height = window.innerWidth >= 1024 ? '100%' : '45%';
-            };
-            applyHeight();
-            window.addEventListener('resize', applyHeight);
-            // store cleanup on element for GC
-            (el as HTMLElement & { _resizeCleanup?: () => void })._resizeCleanup?.();
-            (el as HTMLElement & { _resizeCleanup?: () => void })._resizeCleanup = () =>
-              window.removeEventListener('resize', applyHeight);
-          }
-        }}
-      >
+      {/* Mobile: 45vh height. Desktop: flex-1 fills remaining width at full height */}
+      <div className="relative overflow-hidden flex-shrink-0 h-[45vh] lg:flex-1 lg:h-full lg:min-w-0">
         {/* Status bar */}
         <div className="absolute top-0 left-0 right-0 z-[500] pointer-events-none flex items-center justify-between px-3 lg:px-4 py-2 lg:py-2.5 bg-gradient-to-b from-[#06060f]/95 via-[#06060f]/60 to-transparent">
           <div className="flex items-center gap-2">
