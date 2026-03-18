@@ -24,7 +24,7 @@ function IndexItem({ idx }: { idx: IndexData }) {
 }
 
 export function IndexBar({ forex }: { forex: number }) {
-  const { nseOpen, nyseOpen } = useMarket();
+  const { nseOpen, nyseOpen, forexChangePct } = useMarket();
   const [indices, setIndices] = useState<IndexData[]>(MOCK_INDICES);
 
   useEffect(() => {
@@ -34,6 +34,8 @@ export function IndexBar({ forex }: { forex: number }) {
       })
       .catch(() => { /* keep mock */ });
   }, []);
+
+  const fxPos = forexChangePct !== null && forexChangePct >= 0;
 
   return (
     <div className="bg-surface-1 border-b border-border px-4 py-2">
@@ -51,7 +53,16 @@ export function IndexBar({ forex }: { forex: number }) {
         {/* Forex */}
         <div className="shrink-0">
           <div className="text-[10px] text-zinc-500 leading-none mb-0.5">USD/INR</div>
-          <div className="text-sm font-semibold text-white">₹{forex.toFixed(2)}</div>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-sm font-semibold text-white">₹{forex.toFixed(2)}</span>
+            {forexChangePct !== null ? (
+              <span className={`text-xs font-medium ${fxPos ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fxPos ? '+' : ''}{forexChangePct.toFixed(2)}%
+              </span>
+            ) : (
+              <span className="text-xs text-zinc-600">—</span>
+            )}
+          </div>
         </div>
 
         <div className="flex-1" />

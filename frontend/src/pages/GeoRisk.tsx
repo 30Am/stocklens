@@ -336,10 +336,19 @@ const CONFLICT_ZONES: ConflictZone[] = [
   },
 ];
 
-// ── Fly-to effect ──────────────────────────────────────────────────────────────
+// ── Fly-to effect + size invalidation ─────────────────────────────────────────
 function FlyToZone({ zone }: { zone: ConflictZone | null }) {
   const map = useMap();
   const prevRef = useRef<ConflictZone | null>(null);
+
+  // Invalidate size on mount so Leaflet re-reads the container dimensions
+  // after CSS (flex/vh units) has fully laid out the container.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { map.invalidateSize(); } catch (_) { /* ignore */ }
+    }, 50);
+    return () => clearTimeout(t);
+  }, [map]);
 
   useEffect(() => {
     // Guard: don't fly on initial mount with no zone

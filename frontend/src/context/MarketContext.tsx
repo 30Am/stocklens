@@ -6,7 +6,8 @@ interface MarketContextValue {
   market: MarketFilter;
   setMarket: (m: MarketFilter) => void;
   forex: number;
-  setForex: (r: number) => void;
+  forexChangePct: number | null;
+  setForex: (r: number, changePct?: number | null) => void;
   nseOpen: boolean;
   nyseOpen: boolean;
 }
@@ -15,6 +16,7 @@ const MarketContext = createContext<MarketContextValue>({
   market: 'BOTH',
   setMarket: () => undefined,
   forex: 86.0,
+  forexChangePct: null,
   setForex: () => undefined,
   nseOpen: false,
   nyseOpen: false,
@@ -42,10 +44,16 @@ function isNYSEOpen(): boolean {
 
 export function MarketProvider({ children }: { children: ReactNode }) {
   const [market, setMarket] = useState<MarketFilter>('BOTH');
-  const [forex, setForex] = useState(86.0);
+  const [forex, setForexRate] = useState(86.0);
+  const [forexChangePct, setForexChangePct] = useState<number | null>(null);
+
+  const setForex = (r: number, changePct?: number | null) => {
+    setForexRate(r);
+    if (changePct !== undefined) setForexChangePct(changePct ?? null);
+  };
 
   return (
-    <MarketContext.Provider value={{ market, setMarket, forex, setForex, nseOpen: isNSEOpen(), nyseOpen: isNYSEOpen() }}>
+    <MarketContext.Provider value={{ market, setMarket, forex, forexChangePct, setForex, nseOpen: isNSEOpen(), nyseOpen: isNYSEOpen() }}>
       {children}
     </MarketContext.Provider>
   );

@@ -17,22 +17,32 @@ log = logging.getLogger(__name__)
 
 _PAIR = "USD_INR"
 _cached_rate: float | None = None
+_prev_rate: float | None = None        # rate before the most recent update
 _cached_at: datetime | None = None
 
 _FALLBACK_RATE = 86.0  # approximate rate — only used if all live sources fail
+
+
+def get_cached_change_pct() -> float | None:
+    """Return % change between the last two fetched rates, or None if unavailable."""
+    if _cached_rate and _prev_rate and _prev_rate != 0:
+        return round((_cached_rate - _prev_rate) / _prev_rate * 100, 3)
+    return None
 
 
 async def fetch_usd_inr() -> float:
     """
     Returns current USD→INR exchange rate.
     Caches in-memory; scheduler refreshes every hour.
+    Each call saves the previous rate so change_pct can be derived.
     """
-    global _cached_rate, _cached_at
+    global _cached_rate, _prev_rate, _cached_at
 
     # Try ExchangeRate-API if key is set
     if settings.exchange_rate_api_key:
         rate = await _from_exchangerate_api()
         if rate:
+            _prev_rate = _cached_rate
             _cached_rate = rate
             _cached_at = datetime.now(timezone.utc)
             return rate
@@ -40,6 +50,7 @@ async def fetch_usd_inr() -> float:
     # Fallback 1: Frankfurter API (ECB rates, no key required)
     rate = await _from_frankfurter()
     if rate:
+        _prev_rate = _cached_rate
         _cached_rate = rate
         _cached_at = datetime.now(timezone.utc)
         return rate

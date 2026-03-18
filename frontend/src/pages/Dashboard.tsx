@@ -39,10 +39,10 @@ export function Dashboard() {
   useEffect(() => {
     getForex()
       .then((data: unknown) => {
-        console.log('[Dashboard] getForex response:', data);
-        if (data && typeof (data as { rate: number }).rate === 'number') setForex((data as { rate: number }).rate);
+        const d = data as { rate?: number; change_pct?: number | null };
+        if (d && typeof d.rate === 'number') setForex(d.rate, d.change_pct ?? null);
       })
-      .catch((e) => { console.error('[Dashboard] getForex failed:', e); });
+      .catch(() => { /* keep default */ });
   }, [setForex]);
 
   // Live price updates via WebSocket
